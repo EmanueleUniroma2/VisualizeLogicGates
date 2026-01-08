@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v5.0 - Shapes & UX</title>
+    <title>LogicSim JS v6.0 - Library Management</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -18,19 +18,28 @@
         body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
         
         /* Sidebar */
-        #sidebar { width: 220px; background: var(--panel-color); padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
+        #sidebar { width: 240px; background: var(--panel-color); padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
         h3 { font-size: 0.9rem; color: #888; text-transform: uppercase; margin: 15px 0 5px 0; border-bottom: 1px solid #444; }
         
         .comp-btn { 
-            background: #333; color: white; border: 1px solid #444; padding: 8px; cursor: pointer; 
+            background: #333; color: white; border: 1px solid #444; padding: 6px; cursor: pointer; 
             display: flex; align-items: center; justify-content: space-between; border-radius: 4px; transition: 0.2s;
+            min-height: 30px;
         }
         .comp-btn:hover { background: #444; }
-        .comp-label { display: flex; align-items: center; gap: 10px; flex-grow: 1; }
+        .comp-label { display: flex; align-items: center; gap: 10px; flex-grow: 1; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
         
-        .icon-btn { padding: 4px; border-radius: 3px; cursor: pointer; font-size: 12px; background: #555; border: none; color: white;}
+        /* Button Group for Edit/Delete */
+        .btn-group { display: flex; gap: 4px; }
+        
+        .icon-btn { 
+            padding: 4px 6px; border-radius: 3px; cursor: pointer; font-size: 12px; 
+            background: #555; border: none; color: white; display: flex; align-items: center; justify-content: center;
+        }
         .icon-btn:hover { background: var(--accent-color); }
-        .icon-indicator { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+        .icon-btn.delete:hover { background: var(--danger-color); }
+
+        .icon-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
         /* Canvas */
         #canvas-box { flex-grow: 1; position: relative; background: radial-gradient(#333 1px, transparent 1px) 0 0 / 20px 20px; }
@@ -41,8 +50,7 @@
         
         #status { position: fixed; bottom: 10px; right: 10px; background: #333; padding: 5px 12px; border-radius: 20px; font-size: 0.85em; opacity: 0.8; border: 1px solid #555; }
         
-        /* Hint text */
-        .hint { font-size: 0.75rem; color: #777; margin-top: 5px; text-align: center;}
+        .hint { font-size: 0.75rem; color: #777; margin-top: 5px; text-align: center; font-style: italic;}
     </style>
 </head>
 <body>
@@ -50,25 +58,25 @@
 <div id="sidebar">
     <h3>I/O</h3>
     <div class="comp-btn" onclick="app.setMode('Input')">
-        <div class="comp-label"><span class="icon-indicator" style="background:green"></span>Input Switch</div>
+        <div class="comp-label"><span class="icon-indicator" style="background:green"></span>Switch</div>
     </div>
     <div class="comp-btn" onclick="app.setMode('Clock')">
         <div class="comp-label"><span class="icon-indicator" style="background:var(--clock-color)"></span>Clock</div>
     </div>
     <div class="comp-btn" onclick="app.setMode('Output')">
-        <div class="comp-label"><span class="icon-indicator" style="background:orange"></span>Output Light</div>
+        <div class="comp-label"><span class="icon-indicator" style="background:orange"></span>Light</div>
     </div>
     
     <h3>Logic Gates</h3>
-    <div class="comp-btn" onclick="app.setMode('AND')"><div class="comp-label">AND Gate</div></div>
-    <div class="comp-btn" onclick="app.setMode('OR')"><div class="comp-label">OR Gate</div></div>
-    <div class="comp-btn" onclick="app.setMode('NOT')"><div class="comp-label">NOT Gate</div></div>
-    <div class="comp-btn" onclick="app.setMode('NAND')"><div class="comp-label">NAND Gate</div></div>
-    <div class="comp-btn" onclick="app.setMode('XOR')"><div class="comp-label">XOR Gate</div></div>
+    <div class="comp-btn" onclick="app.setMode('AND')"><div class="comp-label">AND</div></div>
+    <div class="comp-btn" onclick="app.setMode('OR')"><div class="comp-label">OR</div></div>
+    <div class="comp-btn" onclick="app.setMode('NOT')"><div class="comp-label">NOT</div></div>
+    <div class="comp-btn" onclick="app.setMode('NAND')"><div class="comp-label">NAND</div></div>
+    <div class="comp-btn" onclick="app.setMode('XOR')"><div class="comp-label">XOR</div></div>
 
     <h3>My Chips</h3>
     <div id="custom-list"></div>
-    <div class="hint">Click destro per eliminare un elemento</div>
+    <div class="hint">Tasto DX per eliminare dalla canvas</div>
 </div>
 
 <div id="canvas-box">
@@ -220,16 +228,11 @@ const app = {
         this.loadLibUI();
         this.loop();
         
-        // Mouse Events
+        // Events
         this.c.onmousedown = e => this.handleDown(e);
         this.c.onmousemove = e => this.handleMove(e);
         this.c.onmouseup = e => this.handleUp(e);
-        
-        // Context Menu (Right Click Delete)
-        this.c.oncontextmenu = e => {
-            e.preventDefault();
-            this.handleRightClick(e);
-        };
+        this.c.oncontextmenu = e => { e.preventDefault(); this.handleRightClick(e); };
     },
 
     resize() {
@@ -299,23 +302,19 @@ const app = {
             return;
         }
 
-        // Gates
         if (n.type === 'AND' || n.type === 'NAND') {
-            ctx.moveTo(x, y);
-            ctx.lineTo(x + w/2, y);
+            ctx.moveTo(x, y); ctx.lineTo(x + w/2, y);
             ctx.arc(x + w/2, y + h/2, h/2, -Math.PI/2, Math.PI/2);
-            ctx.lineTo(x, y + h);
-            ctx.closePath();
+            ctx.lineTo(x, y + h); ctx.closePath();
         } 
         else if (n.type === 'OR' || n.type === 'NOR') {
             ctx.moveTo(x, y);
-            ctx.quadraticCurveTo(x + w/4, y + h/2, x, y + h); // Back curve
-            ctx.quadraticCurveTo(x + w/2, y + h - 5, x + w, y + h/2); // Bottom curve
-            ctx.quadraticCurveTo(x + w/2, y + 5, x, y); // Top curve
+            ctx.quadraticCurveTo(x + w/4, y + h/2, x, y + h); 
+            ctx.quadraticCurveTo(x + w/2, y + h - 5, x + w, y + h/2);
+            ctx.quadraticCurveTo(x + w/2, y + 5, x, y); 
             ctx.closePath();
         }
         else if (n.type === 'XOR') {
-            // Main body (like OR) slightly offset
             const off = 6;
             ctx.moveTo(x + off, y);
             ctx.quadraticCurveTo(x + w/4 + off, y + h/2, x + off, y + h);
@@ -324,36 +323,22 @@ const app = {
             ctx.closePath();
         }
         else if (n.type === 'NOT') {
-            ctx.moveTo(x, y);
-            ctx.lineTo(x + w - 10, y + h/2);
-            ctx.lineTo(x, y + h);
-            ctx.closePath();
+            ctx.moveTo(x, y); ctx.lineTo(x + w - 10, y + h/2); ctx.lineTo(x, y + h); ctx.closePath();
         }
     },
 
     drawDecorations(ctx, n) {
-        // XOR extra line
         if (n.type === 'XOR') {
-            ctx.beginPath();
-            ctx.strokeStyle = '#ccc';
-            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.strokeStyle = '#ccc'; ctx.lineWidth = 2;
             ctx.moveTo(n.x - 4, n.y);
             ctx.quadraticCurveTo(n.x + n.w/4 - 4, n.y + n.h/2, n.x - 4, n.y + n.h);
             ctx.stroke();
         }
-        // Bubbles for Negated gates
         if (n.type === 'NAND' || n.type === 'NOR' || n.type === 'NOT') {
-            ctx.beginPath();
-            ctx.fillStyle = '#1e1e1e';
-            ctx.strokeStyle = '#ccc';
-            ctx.lineWidth = 1;
-            // Position at tip
+            ctx.beginPath(); ctx.fillStyle = '#1e1e1e'; ctx.strokeStyle = '#ccc'; ctx.lineWidth = 1;
             let bx = n.x + n.w, by = n.y + n.h/2;
             if (n.type === 'NOT') bx = n.x + n.w - 5;
-            
-            ctx.arc(bx, by, 4, 0, Math.PI*2);
-            ctx.fill();
-            ctx.stroke();
+            ctx.arc(bx, by, 4, 0, Math.PI*2); ctx.fill(); ctx.stroke();
         }
     },
 
@@ -374,7 +359,6 @@ const app = {
             ctx.stroke();
         });
 
-        // Temp Wire
         if(this.tempWire) {
             const start = {x: this.tempWire.node.x + (this.tempWire.isInput?this.tempWire.node.ins:this.tempWire.node.outs)[this.tempWire.idx].x, y: this.tempWire.node.y + (this.tempWire.isInput?this.tempWire.node.ins:this.tempWire.node.outs)[this.tempWire.idx].y};
             ctx.beginPath(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
@@ -383,32 +367,21 @@ const app = {
 
         // Nodes
         this.nodes.forEach(n => {
-            // Draw Shape
             this.drawGateShape(ctx, n);
-            
             ctx.fillStyle = '#333'; 
             ctx.strokeStyle = (n === this.dragNode) ? '#fff' : '#ccc';
-            
             if(n.type === 'Clock') ctx.strokeStyle = 'var(--clock-color)';
-            
             ctx.lineWidth = 2;
-            ctx.fill();
-            ctx.stroke();
-
-            // Decorations (Bubbles/Lines)
+            ctx.fill(); ctx.stroke();
             this.drawDecorations(ctx, n);
 
-            // Label (Below the node)
-            ctx.fillStyle = '#aaa'; 
-            ctx.textAlign = 'center'; 
-            ctx.font = '11px sans-serif';
+            // Label
+            ctx.fillStyle = '#aaa'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
             let label = n.label || n.type;
             if(n.type === 'Clock') label = `${n.frequency}Hz`;
-            
-            // Text positioning: Below the bounding box
             ctx.fillText(label, n.x+n.w/2, n.y + n.h + 15);
 
-            // Visual State Indicators (Inside the box for I/O)
+            // Indicators
             if(n.type === 'Input') { ctx.fillStyle = n.state ? '#0f0' : '#222'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Clock') { ctx.fillStyle = n.state ? '#d2a4ff' : '#4a235a'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Output') { ctx.fillStyle = n.currentValue ? '#ff0' : '#220'; ctx.beginPath(); ctx.arc(n.x+n.w/2, n.y+n.h/2, 10, 0, Math.PI*2); ctx.fill(); }
@@ -445,20 +418,17 @@ const app = {
 
     handleRightClick(e) {
         const {x, y} = this.getMouse(e);
-        // Hit test nodes
         const nIdx = this.nodes.findIndex(n => x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h);
         if(nIdx !== -1) {
             const node = this.nodes[nIdx];
-            // Remove Wires connected to this node
             this.wires = this.wires.filter(w => w.fromNode !== node && w.toNode !== node);
-            // Remove Node
             this.nodes.splice(nIdx, 1);
             this.propagate();
         }
     },
 
     handleDown(e) {
-        if(e.button === 2) return; // Ignore right click for drag
+        if(e.button === 2) return;
         const {x, y} = this.getMouse(e);
         const pin = this.hitTestPin(x, y);
         if(pin) { this.tempWire = {...pin, mx:x, my:y}; return; }
@@ -466,19 +436,12 @@ const app = {
         for(let i = this.nodes.length-1; i>=0; i--) {
             const n = this.nodes[i];
             if(x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h) {
-                if(n.type === 'Input') { 
-                    n.state = !n.state; 
-                    this.propagate(); 
-                } else if (n.type === 'Clock') {
+                if(n.type === 'Input') { n.state = !n.state; this.propagate(); }
+                else if (n.type === 'Clock') {
                     const input = prompt(`Frequenza (0.01Hz - 5Hz)`, n.frequency);
-                    if (input !== null) {
-                        const val = parseFloat(input);
-                        if(val >= 0.01 && val <= 5) n.frequency = val;
-                    }
-                } else { 
-                    this.dragNode = n; 
-                    this.dragOffset = {x: x-n.x, y: y-n.y}; 
-                }
+                    if (input !== null) { const val = parseFloat(input); if(val >= 0.01 && val <= 5) n.frequency = val; }
+                } 
+                else { this.dragNode = n; this.dragOffset = {x: x-n.x, y: y-n.y}; }
                 return;
             }
         }
@@ -550,18 +513,46 @@ const app = {
             const div = document.createElement('div');
             div.className = 'comp-btn';
             
+            // Label
             const lbl = document.createElement('div');
             lbl.className = 'comp-label';
-            lbl.innerHTML = `<span class="icon-indicator" style="background:#666"></span> ${bp.name}`;
+            lbl.innerHTML = `<span class="icon-indicator" style="background:#888"></span> ${bp.name}`;
+            lbl.title = "Clicca per piazzare";
             lbl.onclick = () => this.setMode('Custom', bp);
             
+            // Button Group
+            const btnGroup = document.createElement('div');
+            btnGroup.className = 'btn-group';
+
+            // Edit
             const editBtn = document.createElement('button');
             editBtn.className = 'icon-btn';
             editBtn.innerHTML = '✏️';
+            editBtn.title = "Modifica Circuito";
             editBtn.onclick = (e) => { e.stopPropagation(); this.loadForEditing(bp.name); };
+            
+            // Delete
+            const delBtn = document.createElement('button');
+            delBtn.className = 'icon-btn delete';
+            delBtn.innerHTML = '🗑️';
+            delBtn.title = "Elimina Definitivamente";
+            delBtn.onclick = (e) => { e.stopPropagation(); this.deleteLibItem(bp.name); };
 
-            div.appendChild(lbl); div.appendChild(editBtn); list.appendChild(div);
+            btnGroup.appendChild(editBtn);
+            btnGroup.appendChild(delBtn);
+
+            div.appendChild(lbl); 
+            div.appendChild(btnGroup); 
+            list.appendChild(div);
         }
+    },
+
+    deleteLibItem(name) {
+        if(!confirm(`Sei sicuro di voler eliminare "${name}" dalla libreria? Questa azione è irreversibile.`)) return;
+        let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
+        delete lib[name];
+        localStorage.setItem('ls_lib', JSON.stringify(lib));
+        this.loadLibUI();
     },
 
     loadForEditing(name) {
@@ -579,10 +570,8 @@ const app = {
             let node;
             if(n.type === 'Custom') node = new CustomChip(n.x, n.y, n.blueprint, n.id);
             else node = new Node(n.x, n.y, n.type, n.id);
-            
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1; 
-
             this.nodes.push(node);
             nodeMap[node.id] = node;
         });
