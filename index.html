@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v6.0 - Library Management</title>
+    <title>LogicSim JS v7.0 - NOR Added</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -72,6 +72,7 @@
     <div class="comp-btn" onclick="app.setMode('OR')"><div class="comp-label">OR</div></div>
     <div class="comp-btn" onclick="app.setMode('NOT')"><div class="comp-label">NOT</div></div>
     <div class="comp-btn" onclick="app.setMode('NAND')"><div class="comp-label">NAND</div></div>
+    <div class="comp-btn" onclick="app.setMode('NOR')"><div class="comp-label">NOR</div></div>
     <div class="comp-btn" onclick="app.setMode('XOR')"><div class="comp-label">XOR</div></div>
 
     <h3>My Chips</h3>
@@ -120,7 +121,7 @@ class Node {
         } else if (this.type === 'NOT') { 
             this.ins = [{x:0, y:20}]; this.outs = [{x:60, y:20}]; 
         } else { 
-            // Gates
+            // Gates (AND, OR, NAND, NOR, XOR)
             this.ins = [{x:0, y:10}, {x:0, y:30}]; 
             this.outs = [{x:60, y:20}]; 
         }
@@ -137,6 +138,7 @@ class Node {
             case 'OR': return [a || b ? 1 : 0];
             case 'NOT': return [a ? 0 : 1];
             case 'NAND': return [!(a && b) ? 1 : 0];
+            case 'NOR': return [!(a || b) ? 1 : 0];
             case 'XOR': return [a ^ b ? 1 : 0];
             default: return [0];
         }
@@ -228,7 +230,6 @@ const app = {
         this.loadLibUI();
         this.loop();
         
-        // Events
         this.c.onmousedown = e => this.handleDown(e);
         this.c.onmousemove = e => this.handleMove(e);
         this.c.onmouseup = e => this.handleUp(e);
