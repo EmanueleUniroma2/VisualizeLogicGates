@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LogicSim JS - Scalable Circuit Simulator</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-color: #252526;
+            --accent-color: #007acc;
+            --text-color: #d4d4d4;
+            --wire-off: #555;
+            --wire-on: #0f0;
+            --gate-fill: #333;
+            --gate-stroke: #ccc;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        #sidebar {
+            width: 220px;
+            background-color: var(--panel-color);
+            border-right: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+
+        h2, h3 { margin-top: 0; font-size: 1rem; color: #fff; margin-bottom: 10px;}
+        h3 { font-size: 0.85rem; color: #aaa; margin-top: 15px; border-bottom: 1px solid #444; padding-bottom: 5px;}
+
+        .component-btn {
+            background-color: #3c3c3c;
+            border: 1px solid #555;
+            color: white;
+            padding: 8px;
+            margin-bottom: 5px;
+            cursor: pointer;
+            text-align: left;
+            border-radius: 4px;
+            transition: background 0.2s;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+        }
+
+        .component-btn:hover { background-color: #505050; }
+        .component-btn:active { background-color: var(--accent-color); }
+        .component-btn span { margin-left: 10px; }
+        
+        /* Icon placeholders */
+        .icon { width: 20px; height: 20px; display: inline-block; background-size: contain; background-repeat: no-repeat; background-position: center; border-radius: 3px;}
+        .icon-gate { border: 1px solid #777; }
+
+        /* Toolbar */
+        #toolbar {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .tool-btn {
+            padding: 8px 16px;
+            background-color: var(--accent-color);
+            border: none;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .tool-btn.danger { background-color: #ce3838; }
+        .tool-btn:hover { opacity: 0.9; }
+
+        /* Canvas Area */
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            cursor: crosshair;
+            background-image: radial-gradient(#333 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        canvas { display: block; }
+
+        /* Notification */
+        #notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #333;
+            padding: 10px 20px;
+            border-radius: 4px;
+            border-left: 4px solid var(--accent-color);
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>LogicSim JS</h2>
+        
+        <h3>I/O & Base</h3>
+        <div class="component-btn" onclick="app.setMode('Input')"><div class="icon" style="background:green"></div> <span>Input Switch</span></div>
+        <div class="component-btn" onclick="app.setMode('Output')"><div class="icon" style="background:orange"></div> <span>Output Light</span></div>
+        
+        <h3>Logic Gates</h3>
+        <div class="component-btn" onclick="app.setMode('AND')"><div class="icon icon-gate"></div> <span>AND Gate</span></div>
+        <div class="component-btn" onclick="app.setMode('OR')"><div class="icon icon-gate"></div> <span>OR Gate</span></div>
+        <div class="component-btn" onclick="app.setMode('NOT')"><div class="icon icon-gate"></div> <span>NOT Gate</span></div>
+        <div class="component-btn" onclick="app.setMode('NAND')"><div class="icon icon-gate"></div> <span>NAND Gate</span></div>
+        <div class="component-btn" onclick="app.setMode('XOR')"><div class="icon icon-gate"></div> <span>XOR Gate</span></div>
+
+        <h3>My Chips (Library)</h3>
+        <div id="custom-chips-list">
+            </div>
+    </div>
+
+    <div id="canvas-container">
+        <div id="toolbar">
+            <button class="tool-btn" onclick="app.saveAsChip()">Salva come Chip</button>
+            <button class="tool-btn danger" onclick="app.clearCircuit()">Pulisci Tutto</button>
+        </div>
+        <canvas id="circuitCanvas"></canvas>
+    </div>
+
+    <div id="notification">Messaggio</div>
+
+<script>
+/**
+ * -----------------------------------------------------
+ * CORE LOGIC ENGINE
+ * -----------------------------------------------------
+ */
+
+// Global Utils
+const uuid = () => Math.random().toString(36).substr(2, 9);
+const DIST_THRESHOLD = 15;
+
+class Node {
+    constructor(x, y, type, label = "") {
+        this.id = uuid();
+        this.x = x;
+        this.y = y;
+        this.type = type;
+        this.label = label || type;
+        this.w = 60; 
+        this.h = 40;
+        this.inputs = [];  // Array of values [0, 1]
+        this.outputs = [0]; // Array of values
+        
+        // Define pins strictly for UI rendering and Hit testing
+        this.inputPins = []; // {x, y} relative to this.x, this.y
+        this.outputPins = [];
+
+        this.configurePins();
+    }
+
+    configurePins() {
+        // Default pin config based on type
+        if (this.type === 'Input') {
+            this.inputPins = [];
+            this.outputPins = [{x: 60, y: 20}];
+            this.state = 0; // For switches
+        } else if (this.type === 'Output') {
+            this.inputPins = [{x: 0, y: 20}];
+            this.outputPins = [];
+        } else if (this.type === 'NOT') {
+            this.inputPins = [{x: 0, y: 20}];
+            this.outputPins = [{x: 60, y: 20}];
+        } else {
+            // Standard 2-input gates
+            this.inputPins = [{x: 0, y: 10}, {x: 0, y: 30}];
+            this.outputPins = [{x: 60, y: 20}];
+        }
+    }
+
+    compute(inputValues) {
+        const a = inputValues[0] || 0;
+        const b = inputValues[1] || 0;
+
+        switch(this.type) {
+            case 'Input': return [this.state];
+            case 'Output': this.state = a; return [];
+            case 'AND': return [a && b ? 1 : 0];
+            case 'OR': return [a || b ? 1 : 0];
+            case 'NOT': return [a ? 0 : 1];
+            case 'NAND': return [!(a && b) ? 1 : 0];
+            case 'XOR': return [a ^ b ? 1 : 0];
+            default: return [0];
+        }
+    }
+
+    isInside(mx, my) {
+        return mx >= this.x && mx <= this.x + this.w && my >= this.y && my <= this.y + this.h;
+    }
+
+    getPinAt(mx, my) {
+        // Check inputs
+        for(let i=0; i<this.inputPins.length; i++) {
+            let px = this.x + this.inputPins[i].x;
+            let py = this.y + this.inputPins[i].y;
+            if (Math.hypot(mx-px, my-py) < DIST_THRESHOLD) return { type: 'in', index: i, x: px, y: py, node: this };
+        }
+        // Check outputs
+        for(let i=0; i<this.outputPins.length; i++) {
+            let px = this.x + this.outputPins[i].x;
+            let py = this.y + this.outputPins[i].y;
+            if (Math.hypot(mx-px, my-py) < DIST_THRESHOLD) return { type: 'out', index: i, x: px, y: py, node: this };
+        }
+        return null;
+    }
+}
+
+/**
+ * CUSTOM CHIP (BLACK BOX)
+ * Wraps an entire circuit JSON into a single Node.
+ */
+class CustomChip extends Node {
+    constructor(x, y, blueprint) {
+        super(x, y, 'Custom', blueprint.name);
+        this.blueprint = blueprint;
+        // Blueprint contains: { inputs: count, outputs: count, internalCircuit: [...] }
+        
+        // Resize based on pins
+        const maxPins = Math.max(blueprint.inputCount, blueprint.outputCount);
+        this.h = Math.max(40, maxPins * 20 + 20);
+        this.w = 80;
+
+        // Generate Pins
+        this.inputPins = [];
+        for(let i=0; i<blueprint.inputCount; i++) {
+            this.inputPins.push({ x: 0, y: (this.h / (blueprint.inputCount + 1)) * (i+1) });
+        }
+        
+        this.outputPins = [];
+        for(let i=0; i<blueprint.outputCount; i++) {
+            this.outputPins.push({ x: this.w, y: (this.h / (blueprint.outputCount + 1)) * (i+1) });
+        }
+
+        // Internal State Simulation
+        this.internalState = JSON.parse(blueprint.circuitData); 
+        // Need to reconstruct connection map for internal circuit for fast eval
+        // This is a simplified "Interpreter" approach for the POC.
+    }
+
+    compute(inputValues) {
+        // 1. Map External Inputs -> Internal Input Component States
+        const internalInputs = this.internalState.nodes.filter(n => n.type === 'Input');
+        // Sort them by Y position to match pin order (convention)
+        internalInputs.sort((a,b) => a.y - b.y);
+        
+        internalInputs.forEach((node, idx) => {
+            if(idx < inputValues.length) {
+                // We fake the state of the internal input node
+                node.state = inputValues[idx] || 0; 
+                // In a robust engine, we'd inject this value into the simulation step
+            }
+        });
+
+        // 2. Run Internal Simulation (Headless)
+        // We use a static helper to run one pass of the simulation on the data structure
+        Simulator.runHeadless(this.internalState);
+
+        // 3. Map Internal Outputs -> External Output Values
+        const internalOutputs = this.internalState.nodes.filter(n => n.type === 'Output');
+        internalOutputs.sort((a,b) => a.y - b.y);
+
+        const results = internalOutputs.map(n => n.currentValue || 0);
+        return results;
+    }
+}
+
+class Wire {
+    constructor(fromNode, fromPinIdx, toNode, toPinIdx) {
+        this.fromNode = fromNode;
+        this.fromPin = fromPinIdx;
+        this.toNode = toNode;
+        this.toPin = toPinIdx;
+        this.value = 0;
+    }
+}
+
+/**
+ * -----------------------------------------------------
+ * APP CONTROLLER & RENDERER
+ * -----------------------------------------------------
+ */
+class App {
+    constructor() {
+        this.canvas = document.getElementById('circuitCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.nodes = [];
+        this.wires = [];
+        
+        this.currentMode = null; // 'AND', 'OR', 'SELECT', etc.
+        this.dragNode = null;
+        this.tempWire = null; // { startNode, startPin, x, y }
+
+        this.offsetX = 0; // For potential panning later
+        this.offsetY = 0;
+
+        this.library = {}; // Stores custom chip blueprints
+
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        this.setupEvents();
+        this.loadLibrary();
+        
+        // Start Loop
+        this.loop();
+    }
+
+    resize() {
+        this.canvas.width = this.canvas.parentElement.clientWidth;
+        this.canvas.height = this.canvas.parentElement.clientHeight;
+    }
+
+    setMode(mode, customData = null) {
+        this.currentMode = mode;
+        this.customBlueprintToPlace = customData;
+        document.body.style.cursor = mode ? 'copy' : 'default';
+        this.showNotification(`Mode: ${mode}`);
+    }
+
+    addNode(x, y, type) {
+        let node;
+        if (type === 'Custom' && this.customBlueprintToPlace) {
+            node = new CustomChip(x, y, this.customBlueprintToPlace);
+        } else {
+            node = new Node(x, y, type);
+        }
+        this.nodes.push(node);
+        this.propagate();
+    }
+
+    // --- Simulation Core ---
+    propagate() {
+        // Simple iterative simulation (sufficient for non-cyclic combinational logic)
+        // Run multiple passes to allow signal to travel
+        // A topological sort would be more efficient, but this is robust for loops (latches)
+        for (let pass = 0; pass < this.nodes.length + 5; pass++) {
+            let changes = false;
+            
+            this.nodes.forEach(node => {
+                // Gather inputs for this node
+                const inputVals = [];
+                for (let i = 0; i < node.inputPins.length; i++) {
+                    // Find wire connected to this input
+                    const wire = this.wires.find(w => w.toNode === node && w.toPin === i);
+                    inputVals.push(wire ? wire.value : 0);
+                }
+
+                // Compute output
+                const outputVals = node.compute(inputVals);
+
+                // Update output wires
+                outputVals.forEach((val, outIdx) => {
+                    const connectedWires = this.wires.filter(w => w.fromNode === node && w.fromPin === outIdx);
+                    connectedWires.forEach(w => {
+                        if (w.value !== val) {
+                            w.value = val;
+                            changes = true;
+                        }
+                    });
+                    
+                    // Specific logic for visualization components
+                    if (node.type === 'Output' && node.currentValue !== inputVals[0]) {
+                        node.currentValue = inputVals[0]; // Store for rendering
+                    }
+                });
+            });
+
+            if (!changes) break; // Stable state reached
+        }
+    }
+
+    // --- Rendering ---
+    loop() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Draw Wires
+        this.ctx.lineWidth = 3;
+        this.wires.forEach(w => {
+            const start = this.getPinPos(w.fromNode, 'out', w.fromPin);
+            const end = this.getPinPos(w.toNode, 'in', w.toPin);
+            
+            this.ctx.strokeStyle = w.value ? 'var(--wire-on)' : 'var(--wire-off)';
+            this.ctx.beginPath();
+            this.ctx.moveTo(start.x, start.y);
+            // Simple Bezier
+            const cp1 = {x: start.x + 50, y: start.y};
+            const cp2 = {x: end.x - 50, y: end.y};
+            this.ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y);
+            this.ctx.stroke();
+        });
+
+        // Draw Temp Wire
+        if (this.tempWire) {
+            const start = this.getPinPos(this.tempWire.node, this.tempWire.type, this.tempWire.index);
+            this.ctx.strokeStyle = '#aaa';
+            this.ctx.beginPath();
+            this.ctx.moveTo(start.x, start.y);
+            this.ctx.lineTo(this.tempWire.mx, this.tempWire.my);
+            this.ctx.stroke();
+        }
+
+        // Draw Nodes
+        this.ctx.lineWidth = 2;
+        this.nodes.forEach(n => {
+            this.ctx.fillStyle = '#333';
+            this.ctx.strokeStyle = (n === this.dragNode) ? '#fff' : '#777';
+            
+            // Body
+            this.ctx.fillRect(n.x, n.y, n.w, n.h);
+            this.ctx.strokeRect(n.x, n.y, n.w, n.h);
+            
+            // Text
+            this.ctx.fillStyle = '#fff';
+            this.ctx.font = '12px sans-serif';
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(n.label, n.x + n.w/2, n.y + n.h/2 + 4);
+
+            // Visual State (Switch/Bulb)
+            if (n.type === 'Input') {
+                this.ctx.fillStyle = n.state ? '#0f0' : '#333';
+                this.ctx.fillRect(n.x + 10, n.y + 10, 20, 20);
+            }
+            if (n.type === 'Output') {
+                this.ctx.fillStyle = n.currentValue ? '#ff0' : '#220';
+                this.ctx.beginPath();
+                this.ctx.arc(n.x + n.w - 20, n.y + n.h/2, 8, 0, Math.PI*2);
+                this.ctx.fill();
+            }
+
+            // Pins
+            this.ctx.fillStyle = '#999';
+            n.inputPins.forEach(p => this.ctx.fillRect(n.x + p.x - 3, n.y + p.y - 3, 6, 6));
+            n.outputPins.forEach(p => this.ctx.fillRect(n.x + p.x - 3, n.y + p.y - 3, 6, 6));
+        });
+
+        requestAnimationFrame(() => this.loop());
+    }
+
+    getPinPos(node, type, index) {
+        const pin = (type === 'in' ? node.inputPins : node.outputPins)[index];
+        return { x: node.x + pin.x, y: node.y + pin.y };
+    }
+
+    // --- Interaction ---
+    setupEvents() {
+        const c = this.canvas;
+        
+        c.addEventListener('mousedown', e => {
+            const rect = c.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            // 1. Check for Pin Click (Wiring)
+            for(const n of this.nodes) {
+                const pin = n.getPinAt(mx, my);
+                if (pin) {
+                    this.tempWire = { node: n, type: pin.type, index: pin.index, mx, my };
+                    return;
+                }
+            }
+
+            // 2. Check for Node Click (Drag or Toggle)
+            // Reverse order to click top-most
+            for (let i = this.nodes.length - 1; i >= 0; i--) {
+                const n = this.nodes[i];
+                if (n.isInside(mx, my)) {
+                    if (n.type === 'Input') {
+                        n.state = !n.state; // Toggle switch
+                        this.propagate();
+                    } else {
+                        this.dragNode = n;
+                        this.dragOffset = { x: mx - n.x, y: my - n.y };
+                    }
+                    return;
+                }
+            }
+
+            // 3. Place new Node
+            if (this.currentMode) {
+                this.addNode(mx - 30, my - 20, this.currentMode);
+                this.setMode(null);
+            }
+        });
+
+        c.addEventListener('mousemove', e => {
+            const rect = c.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            if (this.dragNode) {
+                this.dragNode.x = mx - this.dragOffset.x;
+                this.dragNode.y = my - this.dragOffset.y;
+            }
+
+            if (this.tempWire) {
+                this.tempWire.mx = mx;
+                this.tempWire.my = my;
+            }
+        });
+
+        c.addEventListener('mouseup', e => {
+            const rect = c.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            if (this.tempWire) {
+                // Try to connect
+                for(const n of this.nodes) {
+                    const pin = n.getPinAt(mx, my);
+                    if (pin && pin.node !== this.tempWire.node && pin.type !== this.tempWire.type) {
+                        // Create valid wire
+                        const from = this.tempWire.type === 'out' ? this.tempWire : pin;
+                        const to = this.tempWire.type === 'in' ? this.tempWire : pin;
+                        
+                        // Remove existing wire to this input (only 1 wire per input allowed)
+                        this.wires = this.wires.filter(w => !(w.toNode === to.node && w.toPin === to.index));
+
+                        this.wires.push(new Wire(from.node, from.index, to.node, to.index));
+                        this.propagate();
+                    }
+                }
+                this.tempWire = null;
+            }
+
+            this.dragNode = null;
+        });
+    }
+
+    // --- Black Box & Storage Logic ---
+
+    saveAsChip() {
+        const name = prompt("Nome del nuovo Chip (es. HalfAdder):");
+        if (!name) return;
+
+        // Identify Inputs and Outputs for the interface
+        // Convention: Inputs sorted by Y position, Outputs sorted by Y position
+        const inputs = this.nodes.filter(n => n.type === 'Input').sort((a,b) => a.y - b.y);
+        const outputs = this.nodes.filter(n => n.type === 'Output').sort((a,b) => a.y - b.y);
+
+        if (inputs.length === 0 && outputs.length === 0) {
+            alert("Il circuito deve avere almeno un Input o un Output per diventare un Chip.");
+            return;
+        }
+
+        // Serialize circuit
+        // We need to save nodes and wires, but with relative positions or just purely logical?
+        // For visual consistency, we save relative structure.
+        
+        // Cleanse circular references for JSON
+        const serializableNodes = this.nodes.map(n => ({
+            id: n.id, type: n.type, x: n.x, y: n.y, label: n.label,
+            // For custom chips inside custom chips, we need to save their blueprint reference too
+            blueprint: n.blueprint || null
+        }));
+
+        const serializableWires = this.wires.map(w => ({
+            fromNodeId: w.fromNode.id, fromPin: w.fromPin,
+            toNodeId: w.toNode.id, toPin: w.toPin
+        }));
+
+        const circuitData = {
+            nodes: serializableNodes,
+            wires: serializableWires
+        };
+
+        const blueprint = {
+            name: name,
+            inputCount: inputs.length,
+            outputCount: outputs.length,
+            circuitData: JSON.stringify(circuitData)
+        };
+
+        // Save to Library
+        this.saveToStorage(blueprint);
+        this.addLibraryButton(blueprint);
+        this.showNotification(`Chip "${name}" salvato!`);
+    }
+
+    saveToStorage(blueprint) {
+        let lib = JSON.parse(localStorage.getItem('logicsim_lib') || '{}');
+        lib[blueprint.name] = blueprint;
+        localStorage.setItem('logicsim_lib', JSON.stringify(lib));
+    }
+
+    loadLibrary() {
+        let lib = JSON.parse(localStorage.getItem('logicsim_lib') || '{}');
+        for(let key in lib) {
+            this.addLibraryButton(lib[key]);
+        }
+    }
+
+    addLibraryButton(blueprint) {
+        // Prevent duplicates in UI
+        if(document.getElementById(`btn-${blueprint.name}`)) return;
+
+        const div = document.createElement('div');
+        div.className = 'component-btn';
+        div.id = `btn-${blueprint.name}`;
+        div.innerHTML = `<div class="icon" style="background:#444; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center;">IC</div> <span>${blueprint.name}</span>`;
+        div.onclick = () => this.setMode('Custom', blueprint);
+        document.getElementById('custom-chips-list').appendChild(div);
+    }
+
+    clearCircuit() {
+        this.nodes = [];
+        this.wires = [];
+        this.ctx.clearRect(0,0,this.canvas.width, this.canvas.height);
+    }
+
+    showNotification(msg) {
+        const el = document.getElementById('notification');
+        el.innerText = msg;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 2000);
+    }
+}
+
+// Helper to run simulation inside a BlackBox without rendering
+const Simulator = {
+    runHeadless: (circuitData) => {
+        // This is a naive reconstruction for the POC. 
+        // Ideally, you would build a persistent graph in the CustomChip class to avoid parsing every frame.
+        // For performance in this demo, we assume the nodes are simple enough.
+        
+        // Re-hydrate (in a real app, do this once in Constructor)
+        const nodeMap = {};
+        circuitData.nodes.forEach(n => {
+             // We reuse the saved state if available, or init default
+             if(!n.simState) n.simState = { inputVals: [], outputVals: [0] };
+             nodeMap[n.id] = n;
+        });
+
+        // Simple Propagate (One Pass is usually not enough for complex, but okay for POC)
+        // We will do a mini-topological evaluation
+        // 1. Inputs are already set by CustomChip.compute() mapping
+        
+        // 2. Compute Gates
+        circuitData.nodes.forEach(n => {
+            if (n.type === 'Input') {
+                 n.currentValue = n.state; // Assumed injected
+                 return;
+            }
+
+            // Gather inputs
+            const myInputs = [];
+            // Find wires pointing to this node
+            // Note: Efficient lookup needed here in prod
+            circuitData.wires.forEach(w => {
+                if(w.toNodeId === n.id) {
+                    const sourceNode = nodeMap[w.fromNodeId];
+                    // Recursively we need source values. 
+                    // In a stateless run, this is hard. 
+                    // *Fix for POC*: We rely on the CustomChip keeping a persistent instance of these nodes, 
+                    // not just raw JSON data.
+                }
+            });
+        });
+        
+        // *Correction for the BlackBox logic in this Single File Demo*:
+        // Since implementing a full nested recursive simulation engine in one file is huge,
+        // The CustomChip class above uses a simplified approach. 
+        // Real implementation requires the CustomChip to hold a `new App()` instance internally minus the canvas.
+    }
+};
+
+/** * PATCHING CustomChip Logic for the Single File Demo 
+ * To make the Black Box actually work, we need to instantiate the inner nodes as real objects.
+ */
+CustomChip.prototype.constructor = function(x, y, blueprint) {
+    // ... (same as above) ...
+    // Instead of raw JSON, let's inflate real Node objects
+    const data = JSON.parse(blueprint.circuitData);
+    this.innerNodes = data.nodes.map(nData => {
+        const newNode = new Node(0,0, nData.type);
+        newNode.id = nData.id; // Keep ID to match wires
+        newNode.state = nData.state || 0; 
+        // If it's a custom chip inside, we'd need recursion here. Omitted for simplicity.
+        return newNode;
+    });
+    this.innerWires = data.wires;
+}
+
+CustomChip.prototype.compute = function(inputValues) {
+    // 1. Map Inputs
+    const innerInputs = this.innerNodes.filter(n => n.type === 'Input').sort((a,b) => a.y - b.y);
+    innerInputs.forEach((n, i) => {
+        n.state = inputValues[i] || 0;
+    });
+
+    // 2. Simulate Inner Circuit (Iterative convergence)
+    for(let pass=0; pass < this.innerNodes.length + 2; pass++) {
+        this.innerNodes.forEach(n => {
+            // Collect inputs for this inner node
+            const nodeInputs = [];
+            for(let pinI = 0; pinI < n.inputPins.length; pinI++) {
+                // Find wire
+                const w = this.innerWires.find(wire => wire.toNodeId === n.id && wire.toPin === pinI);
+                if(w) {
+                    const srcNode = this.innerNodes.find(node => node.id === w.fromNodeId);
+                    // Get src output
+                    // Default Node logic returns array from compute, we need to store last computed output
+                    const srcVal = srcNode.lastOutput ? srcNode.lastOutput[w.fromPin] : 0;
+                    nodeInputs.push(srcVal);
+                } else {
+                    nodeInputs.push(0);
+                }
+            }
+            // Compute
+            n.lastOutput = n.compute(nodeInputs);
+            // If output node, update its "currentValue" for the extractor below
+            if(n.type === 'Output') n.currentValue = nodeInputs[0]; 
+        });
+    }
+
+    // 3. Map Outputs
+    const innerOutputs = this.innerNodes.filter(n => n.type === 'Output').sort((a,b) => a.y - b.y);
+    return innerOutputs.map(n => n.currentValue || 0);
+};
+
+// Initialize
+const app = new App();
+
+</script>
+</body>
+</html>
