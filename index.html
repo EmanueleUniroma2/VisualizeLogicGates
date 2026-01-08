@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v7.0 - NOR Added</title>
+    <title>LogicSim JS v8.0 - Custom Labels</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -29,16 +29,13 @@
         .comp-btn:hover { background: #444; }
         .comp-label { display: flex; align-items: center; gap: 10px; flex-grow: 1; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
         
-        /* Button Group for Edit/Delete */
         .btn-group { display: flex; gap: 4px; }
-        
         .icon-btn { 
             padding: 4px 6px; border-radius: 3px; cursor: pointer; font-size: 12px; 
             background: #555; border: none; color: white; display: flex; align-items: center; justify-content: center;
         }
         .icon-btn:hover { background: var(--accent-color); }
         .icon-btn.delete:hover { background: var(--danger-color); }
-
         .icon-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
         /* Canvas */
@@ -77,7 +74,7 @@
 
     <h3>My Chips</h3>
     <div id="custom-list"></div>
-    <div class="hint">Tasto DX per eliminare dalla canvas</div>
+    <div class="hint">Doppio Click per rinominare<br>Tasto DX per eliminare</div>
 </div>
 
 <div id="canvas-box">
@@ -95,10 +92,11 @@ const dist = (x1, y1, x2, y2) => Math.hypot(x2-x1, y2-y1);
 
 // --- CLASSES ---
 class Node {
-    constructor(x, y, type, id = null) {
+    constructor(x, y, type, id = null, label = null) {
         this.id = id || Math.random().toString(36).substr(2, 9);
         this.x = x; this.y = y;
         this.type = type;
+        this.label = label || type; // Default label is type, but can be customized
         this.w = 60; this.h = 40;
         
         this.state = 0; 
@@ -121,7 +119,6 @@ class Node {
         } else if (this.type === 'NOT') { 
             this.ins = [{x:0, y:20}]; this.outs = [{x:60, y:20}]; 
         } else { 
-            // Gates (AND, OR, NAND, NOR, XOR)
             this.ins = [{x:0, y:10}, {x:0, y:30}]; 
             this.outs = [{x:60, y:20}]; 
         }
@@ -147,18 +144,22 @@ class Node {
 
 class CustomChip extends Node {
     constructor(x, y, blueprint, id = null) {
-        super(x, y, 'Custom', id);
+        // Pass blueprint name as label by default
+        super(x, y, 'Custom', id, blueprint.name);
         this.blueprint = blueprint;
-        this.label = blueprint.name;
         
-        const maxPins = Math.max(blueprint.inputCount, blueprint.outputCount);
+        // Input/Output Labels from blueprint (or fallback)
+        this.inputLabels = blueprint.inputLabels || [];
+        this.outputLabels = blueprint.outputLabels || [];
+
+        const maxPins = Math.max(this.inputLabels.length, this.outputLabels.length);
         this.h = Math.max(40, maxPins * 20 + 20);
-        this.w = 80;
+        this.w = 100; // Wider to fit text
 
         this.ins = [];
-        for(let i=0; i<blueprint.inputCount; i++) this.ins.push({x:0, y: (this.h/(blueprint.inputCount+1))*(i+1)});
+        for(let i=0; i<this.inputLabels.length; i++) this.ins.push({x:0, y: (this.h/(this.inputLabels.length+1))*(i+1)});
         this.outs = [];
-        for(let i=0; i<blueprint.outputCount; i++) this.outs.push({x:this.w, y: (this.h/(blueprint.outputCount+1))*(i+1)});
+        for(let i=0; i<this.outputLabels.length; i++) this.outs.push({x:this.w, y: (this.h/(this.outputLabels.length+1))*(i+1)});
 
         const data = JSON.parse(blueprint.circuitData);
         const innerNodeMap = {};
@@ -166,7 +167,7 @@ class CustomChip extends Node {
         this.innerNodes = data.nodes.map(n => {
             let node;
             if (n.type === 'Custom') node = new CustomChip(0, 0, n.blueprint, n.id);
-            else node = new Node(0, 0, n.type, n.id);
+            else node = new Node(0, 0, n.type, n.id, n.label); // Restore inner label
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1;
             innerNodeMap[node.id] = node;
@@ -234,6 +235,7 @@ const app = {
         this.c.onmousemove = e => this.handleMove(e);
         this.c.onmouseup = e => this.handleUp(e);
         this.c.oncontextmenu = e => { e.preventDefault(); this.handleRightClick(e); };
+        this.c.ondblclick = e => this.handleDblClick(e);
     },
 
     resize() {
@@ -341,6 +343,26 @@ const app = {
             if (n.type === 'NOT') bx = n.x + n.w - 5;
             ctx.arc(bx, by, 4, 0, Math.PI*2); ctx.fill(); ctx.stroke();
         }
+        
+        // Draw Pin Labels for Custom Chips
+        if (n.type === 'Custom') {
+            ctx.fillStyle = '#fff'; 
+            ctx.font = '10px monospace';
+            
+            // Input Labels (Left)
+            ctx.textAlign = 'left';
+            n.inputLabels.forEach((lbl, i) => {
+                const py = n.y + n.ins[i].y;
+                ctx.fillText(lbl, n.x + 5, py + 3);
+            });
+
+            // Output Labels (Right)
+            ctx.textAlign = 'right';
+            n.outputLabels.forEach((lbl, i) => {
+                const py = n.y + n.outs[i].y;
+                ctx.fillText(lbl, n.x + n.w - 5, py + 3);
+            });
+        }
     },
 
     loop() {
@@ -376,10 +398,12 @@ const app = {
             ctx.fill(); ctx.stroke();
             this.drawDecorations(ctx, n);
 
-            // Label
+            // Label (Main Node Label)
             ctx.fillStyle = '#aaa'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
-            let label = n.label || n.type;
+            let label = n.label;
             if(n.type === 'Clock') label = `${n.frequency}Hz`;
+            // Only draw main label below if it's NOT a custom chip (custom chips have internal labels)
+            // Or draw name below custom chip too? Yes, useful.
             ctx.fillText(label, n.x+n.w/2, n.y + n.h + 15);
 
             // Indicators
@@ -425,6 +449,18 @@ const app = {
             this.wires = this.wires.filter(w => w.fromNode !== node && w.toNode !== node);
             this.nodes.splice(nIdx, 1);
             this.propagate();
+        }
+    },
+
+    handleDblClick(e) {
+        const {x, y} = this.getMouse(e);
+        const nIdx = this.nodes.findIndex(n => x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h);
+        if(nIdx !== -1) {
+            const node = this.nodes[nIdx];
+            const newName = prompt("Rinomina componente:", node.label);
+            if(newName && newName.trim() !== "") {
+                node.label = newName.trim();
+            }
         }
     },
 
@@ -484,13 +520,22 @@ const app = {
         const ins = this.nodes.filter(n=>n.type==='Input').sort((a,b)=>a.y-b.y);
         const outs = this.nodes.filter(n=>n.type==='Output').sort((a,b)=>a.y-b.y);
         
+        // Save labels
+        const inputLabels = ins.map(n => n.label);
+        const outputLabels = outs.map(n => n.label);
+
         const data = {
-            name, inputCount: ins.length, outputCount: outs.length,
+            name, 
+            inputLabels, // Save array of labels
+            outputLabels,
+            inputCount: ins.length, // Keep for fallback
+            outputCount: outs.length,
             circuitData: JSON.stringify({
                 nodes: this.nodes.map(n => ({
                     id: n.id, type: n.type, x: n.x, y: n.y, 
                     blueprint: n.blueprint, state: n.state, 
-                    frequency: n.frequency 
+                    frequency: n.frequency,
+                    label: n.label // Save internal labels
                 })),
                 wires: this.wires.map(w => ({
                     fromNodeId: w.fromNode.id, fromPin: w.fromPin, 
@@ -570,7 +615,7 @@ const app = {
         data.nodes.forEach(n => {
             let node;
             if(n.type === 'Custom') node = new CustomChip(n.x, n.y, n.blueprint, n.id);
-            else node = new Node(n.x, n.y, n.type, n.id);
+            else node = new Node(n.x, n.y, n.type, n.id, n.label); // Restore Label
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1; 
             this.nodes.push(node);
