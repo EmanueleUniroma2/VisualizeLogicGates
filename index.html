@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v8.0 - Custom Labels</title>
+    <title>LogicSim JS v9.0 - Infinite Canvas</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -18,7 +18,7 @@
         body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
         
         /* Sidebar */
-        #sidebar { width: 240px; background: var(--panel-color); padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
+        #sidebar { width: 240px; background: var(--panel-color); padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; z-index: 10; box-shadow: 2px 0 5px rgba(0,0,0,0.5);}
         h3 { font-size: 0.9rem; color: #888; text-transform: uppercase; margin: 15px 0 5px 0; border-bottom: 1px solid #444; }
         
         .comp-btn { 
@@ -39,13 +39,17 @@
         .icon-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
         /* Canvas */
-        #canvas-box { flex-grow: 1; position: relative; background: radial-gradient(#333 1px, transparent 1px) 0 0 / 20px 20px; }
+        #canvas-box { flex-grow: 1; position: relative; overflow: hidden; cursor: grab; }
+        #canvas-box:active { cursor: grabbing; }
+
+        /* Grid Background managed via CSS for performance */
+        #c { display: block; background-color: var(--bg-color); background-image: radial-gradient(#444 1px, transparent 1px); background-size: 20px 20px; }
         
-        #toolbar { position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; }
-        .tool-btn { padding: 8px 16px; background: var(--accent-color); border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        #toolbar { position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; z-index: 10;}
+        .tool-btn { padding: 8px 16px; background: var(--accent-color); border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.3);}
         .tool-btn.danger { background: var(--danger-color); }
         
-        #status { position: fixed; bottom: 10px; right: 10px; background: #333; padding: 5px 12px; border-radius: 20px; font-size: 0.85em; opacity: 0.8; border: 1px solid #555; }
+        #status { position: fixed; bottom: 10px; right: 10px; background: #333; padding: 5px 12px; border-radius: 20px; font-size: 0.85em; opacity: 0.8; border: 1px solid #555; pointer-events: none; user-select: none;}
         
         .hint { font-size: 0.75rem; color: #777; margin-top: 5px; text-align: center; font-style: italic;}
     </style>
@@ -74,7 +78,7 @@
 
     <h3>My Chips</h3>
     <div id="custom-list"></div>
-    <div class="hint">Doppio Click per rinominare<br>Tasto DX per eliminare</div>
+    <div class="hint">Doppio Click: Rinomina<br>Drag sfondo: Muovi<br>Tasto DX: Elimina</div>
 </div>
 
 <div id="canvas-box">
@@ -96,7 +100,7 @@ class Node {
         this.id = id || Math.random().toString(36).substr(2, 9);
         this.x = x; this.y = y;
         this.type = type;
-        this.label = label || type; // Default label is type, but can be customized
+        this.label = label || type;
         this.w = 60; this.h = 40;
         
         this.state = 0; 
@@ -144,17 +148,14 @@ class Node {
 
 class CustomChip extends Node {
     constructor(x, y, blueprint, id = null) {
-        // Pass blueprint name as label by default
         super(x, y, 'Custom', id, blueprint.name);
         this.blueprint = blueprint;
-        
-        // Input/Output Labels from blueprint (or fallback)
         this.inputLabels = blueprint.inputLabels || [];
         this.outputLabels = blueprint.outputLabels || [];
 
         const maxPins = Math.max(this.inputLabels.length, this.outputLabels.length);
         this.h = Math.max(40, maxPins * 20 + 20);
-        this.w = 100; // Wider to fit text
+        this.w = 100; 
 
         this.ins = [];
         for(let i=0; i<this.inputLabels.length; i++) this.ins.push({x:0, y: (this.h/(this.inputLabels.length+1))*(i+1)});
@@ -167,7 +168,7 @@ class CustomChip extends Node {
         this.innerNodes = data.nodes.map(n => {
             let node;
             if (n.type === 'Custom') node = new CustomChip(0, 0, n.blueprint, n.id);
-            else node = new Node(0, 0, n.type, n.id, n.label); // Restore inner label
+            else node = new Node(0, 0, n.type, n.id, n.label); 
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1;
             innerNodeMap[node.id] = node;
@@ -224,6 +225,12 @@ const app = {
     tempWire: null,
     hoverPin: null,
     currentEditName: null, 
+    
+    // Viewport / Pan Logic
+    offsetX: 0,
+    offsetY: 0,
+    isPanning: false,
+    lastMouse: {x:0, y:0},
 
     init() {
         this.resize();
@@ -249,6 +256,16 @@ const app = {
         document.getElementById('status').innerText = m ? `Piazza: ${bp ? bp.name : m}` : "Pronto";
     },
 
+    // --- COORDINATE SYSTEMS ---
+    // Screen -> World (for click detection)
+    getWorldPos(e) {
+        const r = this.c.getBoundingClientRect();
+        return {
+            x: (e.clientX - r.left) - this.offsetX,
+            y: (e.clientY - r.top) - this.offsetY
+        };
+    },
+
     addNode(x, y) {
         if(this.mode === 'Custom') this.nodes.push(new CustomChip(x, y, this.blueprint));
         else this.nodes.push(new Node(x, y, this.mode));
@@ -256,7 +273,6 @@ const app = {
         this.propagate();
     },
 
-    // --- LOGIC ---
     updateClocks() {
         const now = Date.now();
         let changed = false;
@@ -299,7 +315,6 @@ const app = {
         ctx.beginPath();
         const x = n.x, y = n.y, w = n.w, h = n.h;
 
-        // Custom Chips (Box)
         if(n.type === 'Custom' || n.type === 'Input' || n.type === 'Output' || n.type === 'Clock') {
             ctx.rect(x, y, w, h);
             return;
@@ -344,31 +359,27 @@ const app = {
             ctx.arc(bx, by, 4, 0, Math.PI*2); ctx.fill(); ctx.stroke();
         }
         
-        // Draw Pin Labels for Custom Chips
         if (n.type === 'Custom') {
-            ctx.fillStyle = '#fff'; 
-            ctx.font = '10px monospace';
-            
-            // Input Labels (Left)
+            ctx.fillStyle = '#fff'; ctx.font = '10px monospace';
             ctx.textAlign = 'left';
-            n.inputLabels.forEach((lbl, i) => {
-                const py = n.y + n.ins[i].y;
-                ctx.fillText(lbl, n.x + 5, py + 3);
-            });
-
-            // Output Labels (Right)
+            n.inputLabels.forEach((lbl, i) => { ctx.fillText(lbl, n.x + 5, n.y + n.ins[i].y + 3); });
             ctx.textAlign = 'right';
-            n.outputLabels.forEach((lbl, i) => {
-                const py = n.y + n.outs[i].y;
-                ctx.fillText(lbl, n.x + n.w - 5, py + 3);
-            });
+            n.outputLabels.forEach((lbl, i) => { ctx.fillText(lbl, n.x + n.w - 5, n.y + n.outs[i].y + 3); });
         }
     },
 
     loop() {
         this.updateClocks();
         const ctx = this.ctx;
+        
+        // Sync Grid with Offset
+        this.c.style.backgroundPosition = `${this.offsetX}px ${this.offsetY}px`;
+
         ctx.clearRect(0,0, this.c.width, this.c.height);
+        
+        // Apply Camera Transform
+        ctx.save();
+        ctx.translate(this.offsetX, this.offsetY);
         
         // Wires
         this.wires.forEach(w => {
@@ -398,20 +409,15 @@ const app = {
             ctx.fill(); ctx.stroke();
             this.drawDecorations(ctx, n);
 
-            // Label (Main Node Label)
             ctx.fillStyle = '#aaa'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
             let label = n.label;
             if(n.type === 'Clock') label = `${n.frequency}Hz`;
-            // Only draw main label below if it's NOT a custom chip (custom chips have internal labels)
-            // Or draw name below custom chip too? Yes, useful.
             ctx.fillText(label, n.x+n.w/2, n.y + n.h + 15);
 
-            // Indicators
             if(n.type === 'Input') { ctx.fillStyle = n.state ? '#0f0' : '#222'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Clock') { ctx.fillStyle = n.state ? '#d2a4ff' : '#4a235a'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Output') { ctx.fillStyle = n.currentValue ? '#ff0' : '#220'; ctx.beginPath(); ctx.arc(n.x+n.w/2, n.y+n.h/2, 10, 0, Math.PI*2); ctx.fill(); }
 
-            // Pins
             const drawP = (pins, isInput) => pins.forEach((p, i) => {
                 const px = n.x + p.x, py = n.y + p.y;
                 const hov = this.hoverPin && this.hoverPin.node === n && this.hoverPin.idx === i && this.hoverPin.isInput === isInput;
@@ -421,13 +427,14 @@ const app = {
             });
             drawP(n.ins, true); drawP(n.outs, false);
         });
+        
+        ctx.restore(); // Restore to screen coords for overlay? (none yet)
         requestAnimationFrame(() => this.loop());
     },
 
     // --- INTERACTION ---
-    getMouse(e) { const r = this.c.getBoundingClientRect(); return {x: e.clientX - r.left, y: e.clientY - r.top}; },
-    
     hitTestPin(mx, my) {
+        // mx, my are World Coordinates
         for(let n of this.nodes) {
             for(let i=0; i<n.ins.length; i++) {
                 const p = n.ins[i];
@@ -442,7 +449,7 @@ const app = {
     },
 
     handleRightClick(e) {
-        const {x, y} = this.getMouse(e);
+        const {x, y} = this.getWorldPos(e);
         const nIdx = this.nodes.findIndex(n => x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h);
         if(nIdx !== -1) {
             const node = this.nodes[nIdx];
@@ -453,7 +460,7 @@ const app = {
     },
 
     handleDblClick(e) {
-        const {x, y} = this.getMouse(e);
+        const {x, y} = this.getWorldPos(e);
         const nIdx = this.nodes.findIndex(n => x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h);
         if(nIdx !== -1) {
             const node = this.nodes[nIdx];
@@ -466,36 +473,66 @@ const app = {
 
     handleDown(e) {
         if(e.button === 2) return;
-        const {x, y} = this.getMouse(e);
-        const pin = this.hitTestPin(x, y);
-        if(pin) { this.tempWire = {...pin, mx:x, my:y}; return; }
+        const world = this.getWorldPos(e);
+        
+        // 1. Hit Pin?
+        const pin = this.hitTestPin(world.x, world.y);
+        if(pin) { this.tempWire = {...pin, mx:world.x, my:world.y}; return; }
 
+        // 2. Hit Node?
         for(let i = this.nodes.length-1; i>=0; i--) {
             const n = this.nodes[i];
-            if(x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h) {
+            if(world.x>=n.x && world.x<=n.x+n.w && world.y>=n.y && world.y<=n.y+n.h) {
                 if(n.type === 'Input') { n.state = !n.state; this.propagate(); }
                 else if (n.type === 'Clock') {
                     const input = prompt(`Frequenza (0.01Hz - 5Hz)`, n.frequency);
                     if (input !== null) { const val = parseFloat(input); if(val >= 0.01 && val <= 5) n.frequency = val; }
                 } 
-                else { this.dragNode = n; this.dragOffset = {x: x-n.x, y: y-n.y}; }
+                else { this.dragNode = n; this.dragOffset = {x: world.x-n.x, y: world.y-n.y}; }
                 return;
             }
         }
-        if(this.mode) this.addNode(x-30, y-20);
+        
+        // 3. Place Node?
+        if(this.mode) {
+            this.addNode(world.x-30, world.y-20);
+            return;
+        }
+
+        // 4. PANNING START
+        this.isPanning = true;
+        this.lastMouse = {x: e.clientX, y: e.clientY};
+        document.body.style.cursor = 'grabbing';
     },
 
     handleMove(e) {
-        const {x, y} = this.getMouse(e);
-        this.hoverPin = this.hitTestPin(x, y);
-        if(this.dragNode) { this.dragNode.x = x - this.dragOffset.x; this.dragNode.y = y - this.dragOffset.y; this.propagate(); }
-        if(this.tempWire) { this.tempWire.mx = x; this.tempWire.my = y; }
+        const world = this.getWorldPos(e);
+        this.hoverPin = this.hitTestPin(world.x, world.y);
+
+        if(this.isPanning) {
+            const dx = e.clientX - this.lastMouse.x;
+            const dy = e.clientY - this.lastMouse.y;
+            this.offsetX += dx;
+            this.offsetY += dy;
+            this.lastMouse = {x: e.clientX, y: e.clientY};
+            return;
+        }
+
+        if(this.dragNode) { 
+            this.dragNode.x = world.x - this.dragOffset.x; 
+            this.dragNode.y = world.y - this.dragOffset.y; 
+            this.propagate(); 
+        }
+        if(this.tempWire) { this.tempWire.mx = world.x; this.tempWire.my = world.y; }
     },
 
     handleUp(e) {
-        const {x, y} = this.getMouse(e);
+        this.isPanning = false;
+        document.body.style.cursor = 'default';
+
+        const world = this.getWorldPos(e);
         if(this.tempWire) {
-            const pin = this.hitTestPin(x, y);
+            const pin = this.hitTestPin(world.x, world.y);
             if(pin && pin.node !== this.tempWire.node && pin.isInput !== this.tempWire.isInput) {
                 const from = this.tempWire.isInput ? pin : this.tempWire;
                 const to = this.tempWire.isInput ? this.tempWire : pin;
@@ -509,7 +546,10 @@ const app = {
     },
 
     // --- SAVE/LOAD ---
-    clear() { this.nodes = []; this.wires = []; this.currentEditName = null; },
+    clear() { 
+        this.nodes = []; this.wires = []; this.currentEditName = null; 
+        this.offsetX = 0; this.offsetY = 0; // Reset view
+    },
     
     saveChip() {
         let name = prompt("Nome Chip:", this.currentEditName || "");
@@ -520,22 +560,18 @@ const app = {
         const ins = this.nodes.filter(n=>n.type==='Input').sort((a,b)=>a.y-b.y);
         const outs = this.nodes.filter(n=>n.type==='Output').sort((a,b)=>a.y-b.y);
         
-        // Save labels
         const inputLabels = ins.map(n => n.label);
         const outputLabels = outs.map(n => n.label);
 
         const data = {
             name, 
-            inputLabels, // Save array of labels
-            outputLabels,
-            inputCount: ins.length, // Keep for fallback
-            outputCount: outs.length,
+            inputLabels, outputLabels,
+            inputCount: ins.length, outputCount: outs.length,
             circuitData: JSON.stringify({
                 nodes: this.nodes.map(n => ({
                     id: n.id, type: n.type, x: n.x, y: n.y, 
                     blueprint: n.blueprint, state: n.state, 
-                    frequency: n.frequency,
-                    label: n.label // Save internal labels
+                    frequency: n.frequency, label: n.label
                 })),
                 wires: this.wires.map(w => ({
                     fromNodeId: w.fromNode.id, fromPin: w.fromPin, 
@@ -559,42 +595,31 @@ const app = {
             const div = document.createElement('div');
             div.className = 'comp-btn';
             
-            // Label
             const lbl = document.createElement('div');
             lbl.className = 'comp-label';
             lbl.innerHTML = `<span class="icon-indicator" style="background:#888"></span> ${bp.name}`;
-            lbl.title = "Clicca per piazzare";
             lbl.onclick = () => this.setMode('Custom', bp);
             
-            // Button Group
             const btnGroup = document.createElement('div');
             btnGroup.className = 'btn-group';
 
-            // Edit
             const editBtn = document.createElement('button');
             editBtn.className = 'icon-btn';
             editBtn.innerHTML = '✏️';
-            editBtn.title = "Modifica Circuito";
             editBtn.onclick = (e) => { e.stopPropagation(); this.loadForEditing(bp.name); };
             
-            // Delete
             const delBtn = document.createElement('button');
             delBtn.className = 'icon-btn delete';
             delBtn.innerHTML = '🗑️';
-            delBtn.title = "Elimina Definitivamente";
             delBtn.onclick = (e) => { e.stopPropagation(); this.deleteLibItem(bp.name); };
 
-            btnGroup.appendChild(editBtn);
-            btnGroup.appendChild(delBtn);
-
-            div.appendChild(lbl); 
-            div.appendChild(btnGroup); 
-            list.appendChild(div);
+            btnGroup.appendChild(editBtn); btnGroup.appendChild(delBtn);
+            div.appendChild(lbl); div.appendChild(btnGroup); list.appendChild(div);
         }
     },
 
     deleteLibItem(name) {
-        if(!confirm(`Sei sicuro di voler eliminare "${name}" dalla libreria? Questa azione è irreversibile.`)) return;
+        if(!confirm(`Eliminare "${name}"?`)) return;
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
         delete lib[name];
         localStorage.setItem('ls_lib', JSON.stringify(lib));
@@ -612,20 +637,44 @@ const app = {
         const data = JSON.parse(bp.circuitData);
         const nodeMap = {};
 
+        // Calculate bounds for auto-center
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
         data.nodes.forEach(n => {
             let node;
             if(n.type === 'Custom') node = new CustomChip(n.x, n.y, n.blueprint, n.id);
-            else node = new Node(n.x, n.y, n.type, n.id, n.label); // Restore Label
+            else node = new Node(n.x, n.y, n.type, n.id, n.label);
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1; 
+            
             this.nodes.push(node);
             nodeMap[node.id] = node;
+
+            // Update Bounds
+            if(n.x < minX) minX = n.x;
+            if(n.y < minY) minY = n.y;
+            if(n.x > maxX) maxX = n.x;
+            if(n.y > maxY) maxY = n.y;
         });
 
         data.wires.forEach(w => {
             const from = nodeMap[w.fromNodeId]; const to = nodeMap[w.toNodeId];
             if(from && to) this.wires.push({ fromNode: from, fromPin: w.fromPin, toNode: to, toPin: w.toPin, value: 0 });
         });
+        
+        // Auto Center Logic
+        if(this.nodes.length > 0) {
+            const circW = maxX - minX + 100; // +100 approx width of last node
+            const circH = maxY - minY + 60;
+            const circCX = minX + circW / 2;
+            const circCY = minY + circH / 2;
+            
+            const viewCX = this.c.width / 2;
+            const viewCY = this.c.height / 2;
+
+            this.offsetX = viewCX - circCX;
+            this.offsetY = viewCY - circCY;
+        }
 
         this.propagate();
         document.getElementById('status').innerText = `Editing: ${name}`;
