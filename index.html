@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v2.0</title>
+    <title>LogicSim JS v4.0 - Clock & CPU Ready</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -11,75 +11,105 @@
             --accent-color: #007acc;
             --text-color: #d4d4d4;
             --wire-off: #555;
-            --wire-on: #4caf50; /* Verde più acceso */
+            --wire-on: #4caf50;
+            --clock-color: #8e44ad;
+            --danger-color: #d9534f;
         }
-        body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: sans-serif; display: flex; height: 100vh; overflow: hidden; }
-        #sidebar { width: 200px; background: var(--panel-color); padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 5px; }
-        .comp-btn { background: #333; color: white; border: 1px solid #444; padding: 10px; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 10px; border-radius: 4px; }
+        body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Sidebar */
+        #sidebar { width: 220px; background: var(--panel-color); padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
+        h3 { font-size: 0.9rem; color: #888; text-transform: uppercase; margin: 15px 0 5px 0; border-bottom: 1px solid #444; }
+        
+        .comp-btn { 
+            background: #333; color: white; border: 1px solid #444; padding: 8px; cursor: pointer; 
+            display: flex; align-items: center; justify-content: space-between; border-radius: 4px; transition: 0.2s;
+        }
         .comp-btn:hover { background: #444; }
-        .icon { width: 15px; height: 15px; border-radius: 50%; display: inline-block; }
+        .comp-label { display: flex; align-items: center; gap: 10px; flex-grow: 1; }
+        
+        .icon-btn { padding: 4px; border-radius: 3px; cursor: pointer; font-size: 12px; background: #555; border: none; color: white;}
+        .icon-btn:hover { background: var(--accent-color); }
+        .icon-indicator { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+        /* Canvas */
         #canvas-box { flex-grow: 1; position: relative; background: radial-gradient(#333 1px, transparent 1px) 0 0 / 20px 20px; }
+        
         #toolbar { position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; }
-        button { padding: 8px 15px; background: var(--accent-color); border: none; color: white; cursor: pointer; border-radius: 4px; font-weight: bold; }
-        button.danger { background: #d9534f; }
-        #status { position: fixed; bottom: 10px; right: 10px; background: #333; padding: 5px 10px; border-radius: 4px; font-size: 0.8em; opacity: 0.7; }
+        .tool-btn { padding: 8px 16px; background: var(--accent-color); border: none; color: white; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .tool-btn.danger { background: var(--danger-color); }
+        
+        #status { position: fixed; bottom: 10px; right: 10px; background: #333; padding: 5px 12px; border-radius: 20px; font-size: 0.85em; opacity: 0.8; border: 1px solid #555; }
     </style>
 </head>
 <body>
 
 <div id="sidebar">
-    <h3>Componenti</h3>
-    <div class="comp-btn" onclick="app.setMode('Input')"><span class="icon" style="background:green"></span>Input</div>
-    <div class="comp-btn" onclick="app.setMode('Output')"><span class="icon" style="background:orange"></span>Output</div>
-    <hr style="width:100%; border:0; border-top:1px solid #444">
-    <div class="comp-btn" onclick="app.setMode('AND')">AND Gate</div>
-    <div class="comp-btn" onclick="app.setMode('OR')">OR Gate</div>
-    <div class="comp-btn" onclick="app.setMode('NOT')">NOT Gate</div>
-    <div class="comp-btn" onclick="app.setMode('NAND')">NAND Gate</div>
-    <div class="comp-btn" onclick="app.setMode('XOR')">XOR Gate</div>
+    <h3>Inputs / Outputs</h3>
+    <div class="comp-btn" onclick="app.setMode('Input')">
+        <div class="comp-label"><span class="icon-indicator" style="background:green"></span>Input Switch</div>
+    </div>
+    <div class="comp-btn" onclick="app.setMode('Clock')">
+        <div class="comp-label"><span class="icon-indicator" style="background:var(--clock-color)"></span>Clock Generator</div>
+    </div>
+    <div class="comp-btn" onclick="app.setMode('Output')">
+        <div class="comp-label"><span class="icon-indicator" style="background:orange"></span>Output Light</div>
+    </div>
+    
+    <h3>Logic Gates</h3>
+    <div class="comp-btn" onclick="app.setMode('AND')"><div class="comp-label">AND Gate</div></div>
+    <div class="comp-btn" onclick="app.setMode('OR')"><div class="comp-label">OR Gate</div></div>
+    <div class="comp-btn" onclick="app.setMode('NOT')"><div class="comp-label">NOT Gate</div></div>
+    <div class="comp-btn" onclick="app.setMode('NAND')"><div class="comp-label">NAND Gate</div></div>
+    <div class="comp-btn" onclick="app.setMode('XOR')"><div class="comp-label">XOR Gate</div></div>
+
+    <h3>My Chips</h3>
     <div id="custom-list"></div>
 </div>
 
 <div id="canvas-box">
     <div id="toolbar">
-        <button onclick="app.saveChip()">Crea Chip (Black Box)</button>
-        <button class="danger" onclick="app.clear()">Pulisci</button>
+        <button class="tool-btn" onclick="app.saveChip()">Salva Chip</button>
+        <button class="tool-btn danger" onclick="app.clear()">Pulisci</button>
     </div>
     <canvas id="c"></canvas>
     <div id="status">Pronto</div>
 </div>
 
 <script>
-// --- CORE ENGINE ---
-
+// --- UTILS ---
 const dist = (x1, y1, x2, y2) => Math.hypot(x2-x1, y2-y1);
 
+// --- CLASSES ---
 class Node {
     constructor(x, y, type, id = null) {
         this.id = id || Math.random().toString(36).substr(2, 9);
         this.x = x; this.y = y;
         this.type = type;
         this.w = 60; this.h = 40;
-        this.state = 0; // For Input
-        this.currentValue = 0; // For Output visualization logic
         
-        // Define Pins relative to X,Y
-        this.ins = []; 
-        this.outs = [];
+        this.state = 0; // Current logic state (0 or 1)
+        this.currentValue = 0; // For output visualization
+        
+        // Clock specific properties
+        if (this.type === 'Clock') {
+            this.frequency = 1; // Hz
+            this.lastTick = Date.now();
+        }
+
+        this.ins = []; this.outs = [];
         this.setupPins();
     }
 
     setupPins() {
-        if (this.type === 'Input') {
+        if (this.type === 'Input' || this.type === 'Clock') {
             this.outs = [{x:60, y:20}];
         } else if (this.type === 'Output') {
             this.ins = [{x:0, y:20}];
-        } else if (this.type === 'NOT') {
-            this.ins = [{x:0, y:20}]; this.outs = [{x:60, y:20}];
-        } else {
-            // Standard 2-input gates (AND, OR, XOR...)
-            this.ins = [{x:0, y:10}, {x:0, y:30}];
-            this.outs = [{x:60, y:20}];
+        } else if (this.type === 'NOT') { 
+            this.ins = [{x:0, y:20}]; this.outs = [{x:60, y:20}]; 
+        } else { 
+            this.ins = [{x:0, y:10}, {x:0, y:30}]; this.outs = [{x:60, y:20}]; 
         }
     }
 
@@ -87,7 +117,8 @@ class Node {
         const a = inputs[0] || 0;
         const b = inputs[1] || 0;
         switch(this.type) {
-            case 'Input': return [this.state];
+            case 'Input': 
+            case 'Clock': return [this.state];
             case 'Output': this.currentValue = a; return [];
             case 'AND': return [a && b ? 1 : 0];
             case 'OR': return [a || b ? 1 : 0];
@@ -99,83 +130,98 @@ class Node {
     }
 }
 
-// Classe separata per i Chip Custom per evitare problemi di prototipo
 class CustomChip extends Node {
-    constructor(x, y, blueprint) {
-        super(x, y, 'Custom');
-        this.blueprint = blueprint; // {name, inputs, outputs, circuitData}
+    constructor(x, y, blueprint, id = null) {
+        super(x, y, 'Custom', id);
+        this.blueprint = blueprint;
         this.label = blueprint.name;
         
-        // Resize dinamico in base ai pin
         const maxPins = Math.max(blueprint.inputCount, blueprint.outputCount);
         this.h = Math.max(40, maxPins * 20 + 20);
         this.w = 80;
 
-        // Genera Pins
         this.ins = [];
         for(let i=0; i<blueprint.inputCount; i++) this.ins.push({x:0, y: (this.h/(blueprint.inputCount+1))*(i+1)});
-        
         this.outs = [];
         for(let i=0; i<blueprint.outputCount; i++) this.outs.push({x:this.w, y: (this.h/(blueprint.outputCount+1))*(i+1)});
 
-        // Idratazione Circuito Interno
         const data = JSON.parse(blueprint.circuitData);
+        const innerNodeMap = {};
+
         this.innerNodes = data.nodes.map(n => {
-            const node = n.type === 'Custom' 
-                ? new CustomChip(0,0, n.blueprint) 
-                : new Node(0,0, n.type, n.id);
-            node.state = n.state || 0; 
+            let node;
+            if (n.type === 'Custom') node = new CustomChip(0, 0, n.blueprint, n.id);
+            else node = new Node(0, 0, n.type, n.id);
+            
+            node.state = n.state || 0;
+            // Restore frequency for clocks inside chips
+            if(n.type === 'Clock') node.frequency = n.frequency || 1; 
+            
+            innerNodeMap[node.id] = node;
             return node;
         });
-        this.innerWires = data.wires;
+
+        this.innerWires = data.wires.map(w => ({
+            fromNode: innerNodeMap[w.fromNodeId], fromPin: w.fromPin,
+            toNode: innerNodeMap[w.toNodeId], toPin: w.toPin
+        })).filter(w => w.fromNode && w.toNode);
     }
 
     compute(inputs) {
-        // 1. Inietta input esterni nei nodi Input interni
+        // 1. Map Inputs
         const iNodes = this.innerNodes.filter(n => n.type === 'Input').sort((a,b)=>a.y - b.y);
         iNodes.forEach((n, i) => n.state = inputs[i] || 0);
 
-        // 2. Simula (Iterazione semplice per stabilizzazione)
+        // 2. Simulate Internal (including internal clocks update)
+        // Note: For internal clocks to tick, we need to update them here. 
+        const now = Date.now();
+        this.innerNodes.forEach(n => {
+            if(n.type === 'Clock') {
+                const halfPeriod = (1000 / n.frequency) / 2;
+                if(now - n.lastTick > halfPeriod) {
+                    n.state = !n.state;
+                    n.lastTick = now;
+                }
+            }
+        });
+
         for(let pass=0; pass < this.innerNodes.length * 2; pass++) {
             this.innerNodes.forEach(n => {
-                // Raccogli valori per questo nodo interno
                 const nodeIns = n.ins.map((_, pinIdx) => {
-                    const wire = this.innerWires.find(w => w.toNodeId === n.id && w.toPin === pinIdx);
+                    const wire = this.innerWires.find(w => w.toNode === n && w.toPin === pinIdx);
                     if(!wire) return 0;
-                    const src = this.innerNodes.find(sn => sn.id === wire.fromNodeId);
+                    const src = wire.fromNode;
                     return src.lastResult ? src.lastResult[wire.fromPin] : 0;
                 });
                 n.lastResult = n.compute(nodeIns);
-                // Salva stato per output finale
                 if(n.type === 'Output') n.currentValue = nodeIns[0];
             });
         }
 
-        // 3. Estrai Output
+        // 3. Map Outputs
         const oNodes = this.innerNodes.filter(n => n.type === 'Output').sort((a,b)=>a.y - b.y);
         return oNodes.map(n => n.currentValue || 0);
     }
 }
 
 // --- APP CONTROLLER ---
-
 const app = {
     c: document.getElementById('c'),
     ctx: document.getElementById('c').getContext('2d'),
     nodes: [],
-    wires: [], // {fromNode, fromPin, toNode, toPin, value}
+    wires: [],
     mode: null,
-    blueprint: null, // Temp holder for custom chip placement
+    blueprint: null,
     tempWire: null,
-    hoverPin: null, // Per feedback visivo
+    hoverPin: null,
+    currentEditName: null, 
 
     init() {
         this.resize();
         window.onresize = () => this.resize();
-        this.loadLib();
+        this.loadLibUI();
         this.loop();
         
-        // Events
         this.c.onmousedown = e => this.handleDown(e);
         this.c.onmousemove = e => this.handleMove(e);
         this.c.onmouseup = e => this.handleUp(e);
@@ -189,7 +235,7 @@ const app = {
     setMode(m, bp = null) { 
         this.mode = m; 
         this.blueprint = bp;
-        document.getElementById('status').innerText = m ? `Modalità: Aggiungi ${bp ? bp.name : m}` : "Pronto";
+        document.getElementById('status').innerText = m ? `Piazza: ${bp ? bp.name : m}` : "Pronto";
     },
 
     addNode(x, y) {
@@ -199,19 +245,45 @@ const app = {
         this.propagate();
     },
 
+    // --- SIMULATION ---
+    updateClocks() {
+        const now = Date.now();
+        let changed = false;
+        
+        // Update top-level clocks
+        this.nodes.forEach(n => {
+            if (n.type === 'Clock') {
+                const halfPeriod = (1000 / n.frequency) / 2;
+                if (now - n.lastTick > halfPeriod) {
+                    n.state = !n.state;
+                    n.lastTick = now;
+                    changed = true;
+                }
+            }
+            // Clocks inside Custom Chips are handled in CustomChip.compute()
+            // But we need to force propagation if a CustomChip contains a clock
+            if (n.type === 'Custom' && this.hasInternalClock(n)) {
+                changed = true; // Always propagate custom chips with clocks to ensure they tick
+            }
+        });
+        
+        if (changed) this.propagate();
+    },
+    
+    hasInternalClock(customNode) {
+        // Recursive check (simplified)
+        return customNode.innerNodes.some(n => n.type === 'Clock' || (n.type === 'Custom' && this.hasInternalClock(n)));
+    },
+
     propagate() {
-        // Ciclo di stabilizzazione
         for(let i=0; i<this.nodes.length + 5; i++) {
             this.nodes.forEach(n => {
-                // Trova valori in ingresso dai fili collegati
                 const inputs = n.ins.map((_, idx) => {
                     const w = this.wires.find(w => w.toNode === n && w.toPin === idx);
                     return w ? w.value : 0;
                 });
-                
                 const outputs = n.compute(inputs);
                 
-                // Aggiorna fili in uscita
                 outputs.forEach((val, idx) => {
                     this.wires.filter(w => w.fromNode === n && w.fromPin === idx)
                               .forEach(w => w.value = val);
@@ -220,15 +292,17 @@ const app = {
         }
     },
 
-    // --- RENDERING ---
+    // --- RENDERING LOOP ---
     loop() {
+        this.updateClocks(); // Check time based updates
+
         const ctx = this.ctx;
         ctx.clearRect(0,0, this.c.width, this.c.height);
         
         // Wires
         this.wires.forEach(w => {
-            const start = this.getPinPos(w.fromNode, w.fromPin, false);
-            const end = this.getPinPos(w.toNode, w.toPin, true);
+            const start = {x: w.fromNode.x + w.fromNode.outs[w.fromPin].x, y: w.fromNode.y + w.fromNode.outs[w.fromPin].y};
+            const end = {x: w.toNode.x + w.toNode.ins[w.toPin].x, y: w.toNode.y + w.toNode.ins[w.toPin].y};
             ctx.beginPath();
             ctx.strokeStyle = w.value ? 'var(--wire-on)' : 'var(--wire-off)';
             ctx.lineWidth = 3;
@@ -239,78 +313,54 @@ const app = {
 
         // Temp Wire
         if(this.tempWire) {
-            const start = this.getPinPos(this.tempWire.node, this.tempWire.idx, this.tempWire.isInput);
-            ctx.beginPath();
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 1;
-            ctx.moveTo(start.x, start.y);
-            ctx.lineTo(this.tempWire.mx, this.tempWire.my);
-            ctx.stroke();
+            const start = {x: this.tempWire.node.x + (this.tempWire.isInput?this.tempWire.node.ins:this.tempWire.node.outs)[this.tempWire.idx].x, y: this.tempWire.node.y + (this.tempWire.isInput?this.tempWire.node.ins:this.tempWire.node.outs)[this.tempWire.idx].y};
+            ctx.beginPath(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+            ctx.moveTo(start.x, start.y); ctx.lineTo(this.tempWire.mx, this.tempWire.my); ctx.stroke();
         }
 
         // Nodes
         this.nodes.forEach(n => {
-            ctx.fillStyle = '#333';
-            ctx.strokeStyle = '#777';
-            ctx.lineWidth = 2;
-            ctx.fillRect(n.x, n.y, n.w, n.h);
-            ctx.strokeRect(n.x, n.y, n.w, n.h);
+            ctx.fillStyle = '#333'; ctx.strokeStyle = '#777'; ctx.lineWidth = 2;
             
-            ctx.fillStyle = '#fff'; 
-            ctx.textAlign = 'center'; 
-            ctx.font = '12px sans-serif';
-            ctx.fillText(n.label || n.type, n.x+n.w/2, n.y+n.h/2+4);
+            // Special color for Clock border
+            if (n.type === 'Clock') ctx.strokeStyle = 'var(--clock-color)';
 
-            // Visual States
-            if(n.type === 'Input') {
-                ctx.fillStyle = n.state ? '#0f0' : '#222';
-                ctx.fillRect(n.x+10, n.y+10, 20, 20);
-            }
-            if(n.type === 'Output') {
-                ctx.fillStyle = n.currentValue ? '#ff0' : '#220';
-                ctx.beginPath(); ctx.arc(n.x+n.w-20, n.y+20, 8, 0, Math.PI*2); ctx.fill();
-            }
+            ctx.fillRect(n.x, n.y, n.w, n.h); ctx.strokeRect(n.x, n.y, n.w, n.h);
+            
+            ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = '12px sans-serif';
+            
+            // Label Logic
+            let label = n.label || n.type;
+            if(n.type === 'Clock') label = `${n.frequency}Hz`;
+            ctx.fillText(label, n.x+n.w/2, n.y+n.h/2+4);
 
-            // Pins Drawing
-            const drawPins = (pins, isInput) => {
-                pins.forEach((p, i) => {
-                    const px = n.x + p.x; 
-                    const py = n.y + p.y;
-                    
-                    // Highlight logic
-                    let isHover = this.hoverPin && this.hoverPin.node === n && this.hoverPin.idx === i && this.hoverPin.isInput === isInput;
-                    
-                    ctx.fillStyle = isHover ? '#fff' : '#999';
-                    const s = isHover ? 10 : 6; // Size
-                    ctx.fillRect(px - s/2, py - s/2, s, s);
-                });
-            };
-            drawPins(n.ins, true);
-            drawPins(n.outs, false);
+            // Visual State Indicators
+            if(n.type === 'Input') { ctx.fillStyle = n.state ? '#0f0' : '#222'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
+            if(n.type === 'Clock') { ctx.fillStyle = n.state ? '#d2a4ff' : '#4a235a'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
+            if(n.type === 'Output') { ctx.fillStyle = n.currentValue ? '#ff0' : '#220'; ctx.beginPath(); ctx.arc(n.x+n.w-20, n.y+20, 8, 0, Math.PI*2); ctx.fill(); }
+
+            // Pins
+            const drawP = (pins, isInput) => pins.forEach((p, i) => {
+                const px = n.x + p.x, py = n.y + p.y;
+                const hov = this.hoverPin && this.hoverPin.node === n && this.hoverPin.idx === i && this.hoverPin.isInput === isInput;
+                ctx.fillStyle = hov ? '#fff' : '#999';
+                const s = hov ? 10 : 6;
+                ctx.fillRect(px-s/2, py-s/2, s, s);
+            });
+            drawP(n.ins, true); drawP(n.outs, false);
         });
-
         requestAnimationFrame(() => this.loop());
     },
 
-    getPinPos(node, idx, isInput) {
-        const p = isInput ? node.ins[idx] : node.outs[idx];
-        return {x: node.x + p.x, y: node.y + p.y};
-    },
-
     // --- INTERACTION ---
-    getMouse(e) {
-        const r = this.c.getBoundingClientRect();
-        return {x: e.clientX - r.left, y: e.clientY - r.top};
-    },
-
+    getMouse(e) { const r = this.c.getBoundingClientRect(); return {x: e.clientX - r.left, y: e.clientY - r.top}; },
+    
     hitTestPin(mx, my) {
         for(let n of this.nodes) {
-            // Check Inputs
             for(let i=0; i<n.ins.length; i++) {
                 const p = n.ins[i];
                 if(dist(mx, my, n.x+p.x, n.y+p.y) < 15) return {node:n, idx:i, isInput:true};
             }
-            // Check Outputs
             for(let i=0; i<n.outs.length; i++) {
                 const p = n.outs[i];
                 if(dist(mx, my, n.x+p.x, n.y+p.y) < 15) return {node:n, idx:i, isInput:false};
@@ -319,46 +369,40 @@ const app = {
         return null;
     },
 
-    handleMove(e) {
-        const {x, y} = this.getMouse(e);
-        this.hoverPin = this.hitTestPin(x, y); // Update hover state
-        
-        if(this.dragNode) {
-            this.dragNode.x = x - this.dragOffset.x;
-            this.dragNode.y = y - this.dragOffset.y;
-        }
-        if(this.tempWire) {
-            this.tempWire.mx = x; this.tempWire.my = y;
-        }
-    },
-
     handleDown(e) {
         const {x, y} = this.getMouse(e);
-        
-        // 1. Click on Pin?
         const pin = this.hitTestPin(x, y);
-        if(pin) {
-            this.tempWire = {...pin, mx:x, my:y};
-            return;
-        }
+        if(pin) { this.tempWire = {...pin, mx:x, my:y}; return; }
 
-        // 2. Click on Node?
         for(let i = this.nodes.length-1; i>=0; i--) {
             const n = this.nodes[i];
             if(x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h) {
-                if(n.type === 'Input') {
-                    n.state = !n.state;
-                    this.propagate();
-                } else {
-                    this.dragNode = n;
-                    this.dragOffset = {x: x-n.x, y: y-n.y};
+                if(n.type === 'Input') { 
+                    n.state = !n.state; 
+                    this.propagate(); 
+                } else if (n.type === 'Clock') {
+                    // Configurazione Clock
+                    const input = prompt(`Imposta Frequenza (0.01Hz - 5Hz)`, n.frequency);
+                    if (input !== null) {
+                        const val = parseFloat(input);
+                        if(val >= 0.01 && val <= 5) n.frequency = val;
+                        else alert("Range valido: 0.01 - 5 Hz");
+                    }
+                } else { 
+                    this.dragNode = n; 
+                    this.dragOffset = {x: x-n.x, y: y-n.y}; 
                 }
                 return;
             }
         }
-
-        // 3. Place Node
         if(this.mode) this.addNode(x-30, y-20);
+    },
+
+    handleMove(e) {
+        const {x, y} = this.getMouse(e);
+        this.hoverPin = this.hitTestPin(x, y);
+        if(this.dragNode) { this.dragNode.x = x - this.dragOffset.x; this.dragNode.y = y - this.dragOffset.y; this.propagate(); }
+        if(this.tempWire) { this.tempWire.mx = x; this.tempWire.my = y; }
     },
 
     handleUp(e) {
@@ -366,18 +410,10 @@ const app = {
         if(this.tempWire) {
             const pin = this.hitTestPin(x, y);
             if(pin && pin.node !== this.tempWire.node && pin.isInput !== this.tempWire.isInput) {
-                // Connection Valid
                 const from = this.tempWire.isInput ? pin : this.tempWire;
                 const to = this.tempWire.isInput ? this.tempWire : pin;
-                
-                // Rimuovi vecchi fili sullo stesso input
                 this.wires = this.wires.filter(w => !(w.toNode === to.node && w.toPin === to.idx));
-                
-                this.wires.push({
-                    fromNode: from.node, fromPin: from.idx,
-                    toNode: to.node, toPin: to.idx,
-                    value: 0
-                });
+                this.wires.push({ fromNode: from.node, fromPin: from.idx, toNode: to.node, toPin: to.idx, value: 0 });
                 this.propagate();
             }
             this.tempWire = null;
@@ -385,42 +421,92 @@ const app = {
         this.dragNode = null;
     },
 
-    // --- LIBRARY ---
-    clear() { this.nodes = []; this.wires = []; },
+    // --- SAVE/LOAD ---
+    clear() { this.nodes = []; this.wires = []; this.currentEditName = null; },
     
     saveChip() {
-        const name = prompt("Nome Chip:");
+        let name = prompt("Nome Chip:", this.currentEditName || "");
         if(!name) return;
+        let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
+        if(lib[name] && !confirm("Sovrascrivere?")) return;
+
         const ins = this.nodes.filter(n=>n.type==='Input').sort((a,b)=>a.y-b.y);
         const outs = this.nodes.filter(n=>n.type==='Output').sort((a,b)=>a.y-b.y);
         
         const data = {
             name, inputCount: ins.length, outputCount: outs.length,
             circuitData: JSON.stringify({
-                nodes: this.nodes.map(n => ({id:n.id, type:n.type, x:n.x, y:n.y, blueprint: n.blueprint, state:n.state})),
-                wires: this.wires.map(w => ({fromNodeId:w.fromNode.id, fromPin:w.fromPin, toNodeId:w.toNode.id, toPin:w.toPin}))
+                nodes: this.nodes.map(n => ({
+                    id: n.id, type: n.type, x: n.x, y: n.y, 
+                    blueprint: n.blueprint, state: n.state, 
+                    frequency: n.frequency // Save frequency
+                })),
+                wires: this.wires.map(w => ({
+                    fromNodeId: w.fromNode.id, fromPin: w.fromPin, 
+                    toNodeId: w.toNode.id, toPin: w.toPin
+                }))
             })
         };
-        
-        let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
         lib[name] = data;
         localStorage.setItem('ls_lib', JSON.stringify(lib));
-        this.addLibBtn(data);
+        this.loadLibUI();
+        this.currentEditName = name;
     },
 
-    loadLib() {
+    loadLibUI() {
+        const list = document.getElementById('custom-list');
+        list.innerHTML = '';
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
-        for(let k in lib) this.addLibBtn(lib[k]);
+        
+        for(let k in lib) {
+            const bp = lib[k];
+            const div = document.createElement('div');
+            div.className = 'comp-btn';
+            
+            const lbl = document.createElement('div');
+            lbl.className = 'comp-label';
+            lbl.innerHTML = `<span class="icon-indicator" style="background:#666"></span> ${bp.name}`;
+            lbl.onclick = () => this.setMode('Custom', bp);
+            
+            const editBtn = document.createElement('button');
+            editBtn.className = 'icon-btn';
+            editBtn.innerHTML = '✏️';
+            editBtn.onclick = (e) => { e.stopPropagation(); this.loadForEditing(bp.name); };
+
+            div.appendChild(lbl); div.appendChild(editBtn); list.appendChild(div);
+        }
     },
-    
-    addLibBtn(bp) {
-        if(document.getElementById('btn-'+bp.name)) return;
-        const d = document.createElement('div');
-        d.className = 'comp-btn';
-        d.id = 'btn-'+bp.name;
-        d.innerHTML = `<span class="icon" style="background:#555"></span> ${bp.name}`;
-        d.onclick = () => this.setMode('Custom', bp);
-        document.getElementById('custom-list').appendChild(d);
+
+    loadForEditing(name) {
+        if(this.nodes.length > 0 && !confirm("Pulisci canvas?")) return;
+        let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
+        const bp = lib[name];
+        if(!bp) return;
+
+        this.clear();
+        this.currentEditName = name;
+        const data = JSON.parse(bp.circuitData);
+        const nodeMap = {};
+
+        data.nodes.forEach(n => {
+            let node;
+            if(n.type === 'Custom') node = new CustomChip(n.x, n.y, n.blueprint, n.id);
+            else node = new Node(n.x, n.y, n.type, n.id);
+            
+            node.state = n.state || 0;
+            if(n.type === 'Clock') node.frequency = n.frequency || 1; // Load frequency
+
+            this.nodes.push(node);
+            nodeMap[node.id] = node;
+        });
+
+        data.wires.forEach(w => {
+            const from = nodeMap[w.fromNodeId]; const to = nodeMap[w.toNodeId];
+            if(from && to) this.wires.push({ fromNode: from, fromPin: w.fromPin, toNode: to, toPin: w.toPin, value: 0 });
+        });
+
+        this.propagate();
+        document.getElementById('status').innerText = `Editing: ${name}`;
     }
 };
 
