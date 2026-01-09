@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v9.4 - Fixed</title>
+    <title>LogicSim JS v10 - CPU Ready</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -153,15 +153,10 @@ class CustomChip extends Node {
     constructor(x, y, blueprint, id = null) {
         super(x, y, 'Custom', id, blueprint.name);
         
-        // --- CRITICAL FIX START ---
-        // Instead of blindly trusting the passed 'blueprint' (which might be a stale snapshot),
-        // we check if a newer version exists in the library.
+        // 1. DYNAMIC LOOKUP: Always fetch the freshest blueprint from storage
         const lib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
         const latestBlueprint = lib[blueprint.name];
-        
-        // Use the latest version from library if available, otherwise fallback to snapshot
         this.blueprint = latestBlueprint || blueprint;
-        // --- CRITICAL FIX END ---
 
         this.inputLabels = this.blueprint.inputLabels || [];
         this.outputLabels = this.blueprint.outputLabels || [];
@@ -183,13 +178,8 @@ class CustomChip extends Node {
         const innerNodeMap = {};
         this.innerNodes = data.nodes.map(n => {
             let node;
-            if (n.type === 'Custom') {
-                // Recursive instantiation will now trigger the lookup above for nested chips
-                node = new CustomChip(0, 0, n.blueprint, n.id);
-            }
-            else {
-                node = new Node(0, 0, n.type, n.id, n.label); 
-            }
+            if (n.type === 'Custom') node = new CustomChip(0, 0, n.blueprint, n.id);
+            else node = new Node(0, 0, n.type, n.id, n.label); 
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1;
             innerNodeMap[node.id] = node;
@@ -200,25 +190,49 @@ class CustomChip extends Node {
             fromNode: innerNodeMap[w.fromNodeId], fromPin: w.fromPin,
             toNode: innerNodeMap[w.toNodeId], toPin: w.toPin
         })).filter(w => w.fromNode && w.toNode);
+
+        // 2. CACHING SETUP
+        // Detect if this chip contains any clocks recursively.
+        // If NO clock is inside, we can cache results aggressively (Memoization).
+        this.hasClock = this.innerNodes.some(n => n.type === 'Clock' || (n.type === 'Custom' && n.hasClock));
+        this.lastInputs = null;
+        this.lastOutputs = null;
     }
 
     compute(inputs) {
+        // 3. MEMOIZATION OPTIMIZATION
+        // If inputs haven't changed and there are no internal clocks, return cached result.
+        // This stops infinite recursion in complex nested circuits.
+        if (this.lastInputs && !this.hasClock) {
+            let changed = false;
+            if(this.lastInputs.length !== inputs.length) changed = true;
+            else {
+                for(let i=0; i<inputs.length; i++) {
+                    if(inputs[i] !== this.lastInputs[i]) { changed = true; break; }
+                }
+            }
+            if(!changed) return this.lastOutputs;
+        }
+
         const iNodes = this.innerNodes.filter(n => n.type === 'Input').sort((a,b)=>a.y - b.y);
         iNodes.forEach((n, i) => n.state = inputs[i] || 0);
 
         const now = Date.now();
-        this.innerNodes.forEach(n => {
-            if(n.type === 'Clock') {
-                const halfPeriod = (1000 / n.frequency) / 2;
-                if(now - n.lastTick > halfPeriod) {
-                    n.state = !n.state;
-                    n.lastTick = now;
+        if(this.hasClock) {
+            this.innerNodes.forEach(n => {
+                if(n.type === 'Clock') {
+                    const halfPeriod = (1000 / n.frequency) / 2;
+                    if(now - n.lastTick > halfPeriod) {
+                        n.state = !n.state;
+                        n.lastTick = now;
+                    }
                 }
-            }
-        });
+            });
+        }
 
-        // increased passes to handle deep ripple chains
-        const passes = Math.max(this.innerNodes.length * 2, 50); 
+        // Logic Pass
+        // With memoization, we don't need excessive passes for stable circuits.
+        const passes = this.innerNodes.length + 5; 
         for(let pass=0; pass < passes; pass++) {
             this.innerNodes.forEach(n => {
                 const nodeIns = n.ins.map((_, pinIdx) => {
@@ -233,7 +247,13 @@ class CustomChip extends Node {
         }
 
         const oNodes = this.innerNodes.filter(n => n.type === 'Output').sort((a,b)=>a.y - b.y);
-        return oNodes.map(n => n.currentValue || 0);
+        const result = oNodes.map(n => n.currentValue || 0);
+
+        // Save to cache
+        this.lastInputs = [...inputs];
+        this.lastOutputs = result;
+        
+        return result;
     }
 }
 
@@ -303,18 +323,19 @@ const app = {
                     changed = true;
                 }
             }
-            if (n.type === 'Custom' && this.hasInternalClock(n)) changed = true;
+            // Efficient check using cached property
+            if (n.type === 'Custom' && n.hasClock) changed = true;
         });
         if (changed) this.propagate();
     },
-    
-    hasInternalClock(customNode) {
-        return customNode.innerNodes.some(n => n.type === 'Clock' || (n.type === 'Custom' && this.hasInternalClock(n)));
-    },
 
     propagate() {
-        // Significantly increased propagation loops for Ripple Adder (17 inputs -> deep logic)
-        for(let i=0; i<this.nodes.length * 4 + 50; i++) {
+        // Optimized propagation loop. 
+        // With memoization inside CustomChip, we can run fewer "meta-loops" 
+        // because chips settle instantly.
+        const passes = Math.min(this.nodes.length * 2 + 20, 100); 
+        
+        for(let i=0; i<passes; i++) {
             this.nodes.forEach(n => {
                 const inputs = n.ins.map((_, idx) => {
                     const w = this.wires.find(w => w.toNode === n && w.toPin === idx);
@@ -327,6 +348,14 @@ const app = {
                 });
             });
         }
+    },
+
+    // 4. RENDERING OPTIMIZATION: Viewport Culling
+    // Checks if a bounding box is visible on screen.
+    isVisible(x, y, w, h) {
+        const sx = x + this.offsetX;
+        const sy = y + this.offsetY;
+        return (sx + w > 0 && sx < this.c.width && sy + h > 0 && sy < this.c.height);
     },
 
     drawGateShape(ctx, n) {
@@ -391,7 +420,13 @@ const app = {
         ctx.save();
         ctx.translate(this.offsetX, this.offsetY);
         
+        // Culling: Wires
+        // Only draw wires that are somewhat visible (simple check via nodes)
         this.wires.forEach(w => {
+            // Check if either start or end is visible
+            if(!this.isVisible(w.fromNode.x, w.fromNode.y, w.fromNode.w, w.fromNode.h) && 
+               !this.isVisible(w.toNode.x, w.toNode.y, w.toNode.w, w.toNode.h)) return;
+
             const start = {x: w.fromNode.x + w.fromNode.outs[w.fromPin].x, y: w.fromNode.y + w.fromNode.outs[w.fromPin].y};
             const end = {x: w.toNode.x + w.toNode.ins[w.toPin].x, y: w.toNode.y + w.toNode.ins[w.toPin].y};
             ctx.beginPath();
@@ -408,7 +443,10 @@ const app = {
             ctx.moveTo(start.x, start.y); ctx.lineTo(this.tempWire.mx, this.tempWire.my); ctx.stroke();
         }
 
+        // Culling: Nodes
         this.nodes.forEach(n => {
+            if(!this.isVisible(n.x, n.y, n.w, n.h)) return; // Skip drawing off-screen nodes
+
             this.drawGateShape(ctx, n);
             ctx.fillStyle = '#333'; 
             ctx.strokeStyle = (n === this.dragNode) ? '#fff' : '#ccc';
@@ -416,13 +454,16 @@ const app = {
             ctx.lineWidth = 2;
             ctx.fill(); ctx.stroke();
             this.drawDecorations(ctx, n);
+            
             ctx.fillStyle = '#aaa'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
             let label = n.label;
             if(n.type === 'Clock') label = `${n.frequency}Hz`;
             ctx.fillText(label, n.x+n.w/2, n.y + n.h + 15);
+            
             if(n.type === 'Input') { ctx.fillStyle = n.state ? '#0f0' : '#222'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Clock') { ctx.fillStyle = n.state ? '#d2a4ff' : '#4a235a'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Output') { ctx.fillStyle = n.currentValue ? '#ff0' : '#220'; ctx.beginPath(); ctx.arc(n.x+n.w/2, n.y+n.h/2, 10, 0, Math.PI*2); ctx.fill(); }
+            
             const drawP = (pins, isInput) => pins.forEach((p, i) => {
                 const px = n.x + p.x, py = n.y + p.y;
                 const hov = this.hoverPin && this.hoverPin.node === n && this.hoverPin.idx === i && this.hoverPin.isInput === isInput;
@@ -438,6 +479,9 @@ const app = {
 
     hitTestPin(mx, my) {
         for(let n of this.nodes) {
+            // Optimization: Skip hit testing on off-screen nodes (rough check)
+            if(!this.isVisible(n.x, n.y, n.w, n.h)) continue;
+
             for(let i=0; i<n.ins.length; i++) {
                 const p = n.ins[i];
                 if(dist(mx, my, n.x+p.x, n.y+p.y) < 15) return {node:n, idx:i, isInput:true};
@@ -563,7 +607,7 @@ const app = {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `logicsim_fixed_${new Date().toISOString().slice(0,10)}.json`;
+        a.download = `logicsim_cpu_ready_${new Date().toISOString().slice(0,10)}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -600,7 +644,6 @@ const app = {
         input.click();
     },
 
-    // *** TEST FEATURE ***
     testChip(name) {
         if(this.nodes.length > 0 && !confirm("Clear canvas for testing?")) return;
         const lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
@@ -610,13 +653,11 @@ const app = {
         this.clear();
         document.getElementById('status').innerText = `Testing: ${name}`;
 
-        // 1. Place Chip
         const centerX = this.c.width / 2 - 50; 
         const centerY = this.c.height / 2 - (Math.max(40, Math.max(bp.inputCount, bp.outputCount) * 20 + 20) / 2);
         const chip = new CustomChip(centerX, centerY, bp);
         this.nodes.push(chip);
 
-        // 2. Group Inputs (A0..A7)
         const inputGroups = {}; 
         const keys = [];
         
@@ -630,33 +671,22 @@ const app = {
             inputGroups[key].push(i);
         });
 
-        // 3. Create Inputs
         keys.forEach((key, colIdx) => {
             const colX = centerX - 100 - ((keys.length - 1 - colIdx) * 80);
-            
             inputGroups[key].forEach(pinIdx => {
                 const pinY = chip.ins[pinIdx].y;
                 const sw = new Node(colX, chip.y + pinY - 10, 'Input', null, bp.inputLabels[pinIdx]);
                 this.nodes.push(sw);
-                
-                this.wires.push({ 
-                    fromNode: sw, fromPin: 0, 
-                    toNode: chip, toPin: pinIdx, value: 0 
-                });
+                this.wires.push({ fromNode: sw, fromPin: 0, toNode: chip, toPin: pinIdx, value: 0 });
             });
         });
 
-        // 4. Create Outputs
         const outX = centerX + chip.w + 100;
         bp.outputLabels.forEach((lbl, i) => {
             const pinY = chip.outs[i].y;
             const light = new Node(outX, chip.y + pinY - 10, 'Output', null, lbl);
             this.nodes.push(light);
-            
-            this.wires.push({ 
-                fromNode: chip, fromPin: i, 
-                toNode: light, toPin: 0, value: 0 
-            });
+            this.wires.push({ fromNode: chip, fromPin: i, toNode: light, toPin: 0, value: 0 });
         });
 
         this.offsetX = 0; this.offsetY = 0;
