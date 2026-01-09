@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v13 - Clean & Stable</title>
+    <title>LogicSim JS v14 - Hybrid Compiler</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -101,6 +101,140 @@
 <script>
 const dist = (x1, y1, x2, y2) => Math.hypot(x2-x1, y2-y1);
 
+// --- COMPILER & VM ENGINE ---
+// Ops Codes: 0:AND, 1:OR, 2:NOT, 3:NAND, 4:NOR, 5:XOR
+const OP_AND=0, OP_OR=1, OP_NOT=2, OP_NAND=3, OP_NOR=4, OP_XOR=5;
+
+class Compiler {
+    static compile(blueprint, lib) {
+        // This flattens the entire hierarchy into a single instruction list
+        const ctx = {
+            wires: [],      // Array of wire values (simulated memory)
+            ops: [],        // [OP_CODE, IN1, IN2, OUT, ...]
+            nextWireId: 0,
+            hasClock: false
+        };
+        
+        // Reserve wires for Main Chip Inputs
+        const inputWireIds = [];
+        for(let i=0; i<blueprint.inputCount; i++) inputWireIds.push(ctx.nextWireId++);
+
+        // Compile Body
+        const outputWireIds = this.compileNodeRecursively(blueprint, ctx, inputWireIds, lib);
+        
+        return {
+            ops: new Int32Array(ctx.ops),
+            wireCount: ctx.nextWireId,
+            inputs: inputWireIds,
+            outputs: outputWireIds,
+            hasClock: ctx.hasClock
+        };
+    }
+
+    static compileNodeRecursively(bp, ctx, inputWires, lib) {
+        let data = bp.circuitData;
+        if(typeof data === 'string') try { data = JSON.parse(data); } catch(e){ data = {nodes:[], wires:[]}; }
+
+        // 1. Map local nodes to their Output Wire IDs
+        const localNodeOutputs = {}; // nodeId -> [wireId, wireId...]
+        
+        // Pre-allocate output wires for all nodes in this layer
+        data.nodes.forEach(n => {
+            if(n.type === 'Input') {
+                // Inputs are already provided by `inputWires` arg, but we need to map the ID
+                // actually, inputs in `data.nodes` act as sources.
+                // We will assign them the IDs passed from parent.
+            } else {
+                const pinCount = (n.type === 'Custom' || n.type === 'CustomChip') 
+                    ? (n.blueprint?.outputCount || 0) 
+                    : (n.type === 'NOT' || n.type === 'Output' ? 1 : 1);
+                
+                const outs = [];
+                for(let i=0; i<pinCount; i++) outs.push(ctx.nextWireId++);
+                localNodeOutputs[n.id] = outs;
+                
+                if(n.type === 'Clock') ctx.hasClock = true;
+            }
+        });
+
+        // 2. Resolve internal connections (Wires -> "Netlist")
+        // We need to know "NodeID:Pin" -> "WireID"
+        const getInputWireForNode = (nodeId, pinIdx) => {
+            // Find the wire in this circuit that connects TO this node/pin
+            const wire = data.wires.find(w => w.toNodeId === nodeId && w.toPin === pinIdx);
+            if(!wire) return -1; // Floating input
+
+            const srcNode = data.nodes.find(n => n.id === wire.fromNodeId);
+            if(!srcNode) return -1;
+
+            if(srcNode.type === 'Input') {
+                // Determine which Input Index this node corresponds to
+                // We assume inputs are sorted by Y usually, but let's trust the array order or label?
+                // LogicSim stores them in list. We need index.
+                const inputNodes = data.nodes.filter(n => n.type === 'Input').sort((a,b)=>a.y - b.y);
+                const idx = inputNodes.indexOf(srcNode);
+                return (idx >= 0 && idx < inputWires.length) ? inputWires[idx] : -1;
+            } else {
+                return localNodeOutputs[srcNode.id] ? localNodeOutputs[srcNode.id][wire.fromPin] : -1;
+            }
+        };
+
+        // 3. Generate Ops
+        data.nodes.forEach(n => {
+            if(n.type === 'Input' || n.type === 'Output' || n.type === 'Clock') return; // Handled structurally
+
+            if(n.type === 'Custom' || n.type === 'CustomChip') {
+                // RECURSION: Compile the sub-chip inline
+                // 1. Gather inputs for sub-chip
+                const subBp = lib[n.blueprint.name] || n.blueprint;
+                const subInputs = [];
+                for(let i=0; i<subBp.inputCount; i++) {
+                    subInputs.push(getInputWireForNode(n.id, i));
+                }
+                
+                // 2. Recurse
+                const subOutputs = this.compileNodeRecursively(subBp, ctx, subInputs, lib);
+                
+                // 3. Link sub-outputs to local outputs (Buffer op: out = in)
+                // This is a "Move" op to map the recursion result to the allocated wire
+                const allocated = localNodeOutputs[n.id];
+                for(let i=0; i<allocated.length; i++) {
+                    if(i < subOutputs.length) {
+                         // Optimization: Direct wire aliasing would be better, but OR/Buffer is safer for now
+                         // We insert a "Buffer" (OR with 0 or AND with 1, or just NOT NOT). 
+                         // To keep VM simple, we just use OR with itself. A | A = A.
+                         ctx.ops.push(OP_OR, subOutputs[i], subOutputs[i], allocated[i]);
+                    }
+                }
+            } else {
+                // Primitive Gate
+                const w1 = getInputWireForNode(n.id, 0);
+                const w2 = (n.type !== 'NOT') ? getInputWireForNode(n.id, 1) : -1;
+                const out = localNodeOutputs[n.id][0];
+
+                if(w1 === -1 && w2 === -1) return; // Disconnected gate
+
+                let op = -1;
+                switch(n.type) {
+                    case 'AND': op = OP_AND; break;
+                    case 'OR':  op = OP_OR; break;
+                    case 'NOT': op = OP_NOT; break;
+                    case 'NAND': op = OP_NAND; break;
+                    case 'NOR': op = OP_NOR; break;
+                    case 'XOR': op = OP_XOR; break;
+                }
+                if(op !== -1) ctx.ops.push(op, w1, w2 !== -1 ? w2 : w1, out); // Use w1 twice for NOT if needed
+            }
+        });
+
+        // 4. Gather Outputs of this block to return to parent
+        const outputNodes = data.nodes.filter(n => n.type === 'Output').sort((a,b)=>a.y - b.y);
+        const resultWires = outputNodes.map(n => getInputWireForNode(n.id, 0));
+        return resultWires;
+    }
+}
+// ----------------------------
+
 class Node {
     constructor(x, y, type, id = null, label = null) {
         this.id = id || Math.random().toString(36).substr(2, 9);
@@ -153,10 +287,9 @@ class CustomChip extends Node {
     constructor(x, y, blueprint, id = null) {
         super(x, y, 'Custom', id, blueprint.name);
         
-        // 1. LOOKUP: Always fetch the freshest blueprint from storage
         const lib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
-        const latestBlueprint = lib[blueprint.name];
-        this.blueprint = latestBlueprint || blueprint;
+        const latestBlueprint = lib[blueprint.name] || blueprint;
+        this.blueprint = latestBlueprint;
 
         this.inputLabels = this.blueprint.inputLabels || [];
         this.outputLabels = this.blueprint.outputLabels || [];
@@ -170,83 +303,96 @@ class CustomChip extends Node {
         this.outs = [];
         for(let i=0; i<this.outputLabels.length; i++) this.outs.push({x:this.w, y: (this.h/(this.outputLabels.length+1))*(i+1)});
 
-        let data = this.blueprint.circuitData;
-        if (typeof data === 'string') {
-            try { data = JSON.parse(data); } catch(e) { data = {nodes:[], wires:[]}; }
+        // --- HYBRID COMPILATION ---
+        // 1. Compile to Flattened Bytecode
+        this.program = Compiler.compile(this.blueprint, lib);
+        
+        // 2. Allocate Fast Memory
+        this.memory = new Int8Array(this.program.wireCount);
+        
+        // 3. Truth Table Optimization (for small, combinatorial chips)
+        this.truthTable = null;
+        this.useTruthTable = false;
+
+        if(!this.program.hasClock && this.inputLabels.length <= 10) {
+            this.buildTruthTable();
+            this.useTruthTable = true;
         }
 
-        // Map Internal Nodes
-        const innerNodeMap = {};
-        this.innerNodes = data.nodes.map(n => {
-            let node;
-            if (n.type === 'Custom') node = new CustomChip(0, 0, n.blueprint, n.id);
-            else node = new Node(0, 0, n.type, n.id, n.label); 
-            node.state = n.state || 0;
-            if(n.type === 'Clock') node.frequency = n.frequency || 1;
-            innerNodeMap[node.id] = node;
-            return node;
-        });
+        // Clock handling for internal clocks inside the flat list (not fully supported in flat VM yet, 
+        // effectively flattening removes clocks unless we map them. 
+        // For now, if hasClock, we rely on the parent tick to re-run the VM).
+    }
 
-        // --- STABLE OPTIMIZATION: Map Lookup ---
-        // Instead of complex logic, we just make finding connections instant (O(1)).
-        // This removes the 15s lag without changing HOW the simulator thinks.
-        this.connectionMap = new Map();
+    buildTruthTable() {
+        const inputs = this.inputLabels.length;
+        const rows = 1 << inputs; // 2^inputs
+        // Store outputs packed? Or simple array of arrays. 
+        // For speed, let's use a flat Uint8Array: row * outputCount + outIdx
+        this.truthTable = new Uint8Array(rows * this.outputLabels.length);
         
-        data.wires.forEach(w => {
-            const fromNode = innerNodeMap[w.fromNodeId];
-            const toNode = innerNodeMap[w.toNodeId];
-            if(fromNode && toNode) {
-                // Key format: "NodeID:PinIndex" -> Value: SourceNode
-                const key = `${toNode.id}:${w.toPin}`;
-                this.connectionMap.set(key, { node: fromNode, pin: w.fromPin });
+        for(let i=0; i<rows; i++) {
+            // 1. Set Inputs
+            for(let b=0; b<inputs; b++) {
+                this.memory[this.program.inputs[b]] = (i >> b) & 1;
             }
-        });
+            // 2. Run VM
+            this.runVM();
+            // 3. Store Outputs
+            for(let o=0; o<this.outputLabels.length; o++) {
+                this.truthTable[i * this.outputLabels.length + o] = this.memory[this.program.outputs[o]];
+            }
+        }
+    }
+
+    runVM() {
+        const ops = this.program.ops;
+        const mem = this.memory;
+        for(let i=0; i<ops.length; i+=4) {
+            const op = ops[i];
+            const v1 = mem[ops[i+1]];
+            const v2 = mem[ops[i+2]];
+            let res = 0;
+            switch(op) {
+                case 0: res = v1 & v2; break; // AND
+                case 1: res = v1 | v2; break; // OR
+                case 2: res = v1 ? 0 : 1; break; // NOT
+                case 3: res = (v1 & v2) ? 0 : 1; break; // NAND
+                case 4: res = (v1 | v2) ? 0 : 1; break; // NOR
+                case 5: res = v1 ^ v2; break; // XOR
+            }
+            mem[ops[i+3]] = res;
+        }
     }
 
     compute(inputs) {
-        // 1. Set Inputs directly to internal components
-        const iNodes = this.innerNodes.filter(n => n.type === 'Input').sort((a,b)=>a.y - b.y);
-        iNodes.forEach((n, i) => {
-            n.state = inputs[i] || 0;
-            // CRITICAL: Ensure the input node has a "result" ready for reading
-            n.lastResult = [n.state];
-        });
-
-        // 2. Handle Internal Clocks
-        const now = Date.now();
-        this.innerNodes.forEach(n => {
-            if(n.type === 'Clock') {
-                const halfPeriod = (1000 / n.frequency) / 2;
-                if(now - n.lastTick > halfPeriod) {
-                    n.state = !n.state;
-                    n.lastTick = now;
-                }
+        // --- FAST PATH 1: TRUTH TABLE ---
+        if(this.useTruthTable) {
+            let idx = 0;
+            for(let i=0; i<inputs.length; i++) {
+                if(inputs[i]) idx |= (1 << i);
             }
-        });
-
-        // 3. Logic Propagation
-        // Standard loop count - enough for ripple adders but safe
-        const passes = Math.max(this.innerNodes.length + 10, 50); 
-        
-        for(let pass=0; pass < passes; pass++) {
-            this.innerNodes.forEach(n => {
-                if(n.type === 'Input') return; // Skip inputs, we set them above
-
-                const nodeIns = n.ins.map((_, pinIdx) => {
-                    // FAST LOOKUP: O(1) instead of searching the array
-                    const conn = this.connectionMap.get(`${n.id}:${pinIdx}`);
-                    if (!conn) return 0;
-                    return conn.node.lastResult ? conn.node.lastResult[conn.pin] : 0;
-                });
-
-                n.lastResult = n.compute(nodeIns);
-                if(n.type === 'Output') n.currentValue = nodeIns[0];
-            });
+            const offset = idx * this.outputLabels.length;
+            const res = [];
+            for(let i=0; i<this.outputLabels.length; i++) res.push(this.truthTable[offset+i]);
+            return res;
         }
 
-        // 4. Gather Outputs
-        const oNodes = this.innerNodes.filter(n => n.type === 'Output').sort((a,b)=>a.y - b.y);
-        return oNodes.map(n => n.currentValue || 0);
+        // --- FAST PATH 2: BYTECODE VM ---
+        // 1. Load Inputs
+        for(let i=0; i<inputs.length; i++) {
+            this.memory[this.program.inputs[i]] = inputs[i] || 0;
+        }
+
+        // 2. Execute Linear Ops (No recursion, No objects)
+        this.runVM();
+
+        // 3. Read Outputs
+        const res = [];
+        for(let i=0; i<this.outputLabels.length; i++) {
+            res.push(this.memory[this.program.outputs[i]]);
+        }
+        return res;
     }
 }
 
@@ -316,18 +462,18 @@ const app = {
                     changed = true;
                 }
             }
-            if (n.type === 'Custom' && this.hasInternalClock(n)) changed = true;
+            // If custom chip has internal clock, we just re-run it? 
+            // In flattened VM, we don't handle internal clock events easily yet. 
+            // It relies on inputs changing.
         });
         if (changed) this.propagate();
     },
-    
-    hasInternalClock(customNode) {
-        return customNode.innerNodes.some(n => n.type === 'Clock' || (n.type === 'Custom' && this.hasInternalClock(n)));
-    },
 
     propagate() {
-        // Safe iteration count
-        for(let i=0; i<this.nodes.length * 2 + 20; i++) {
+        // Just a few passes are needed now because sub-chips are atomic/instant
+        const passes = this.nodes.length + 5;
+        
+        for(let i=0; i<passes; i++) {
             this.nodes.forEach(n => {
                 const inputs = n.ins.map((_, idx) => {
                     const w = this.wires.find(w => w.toNode === n && w.toPin === idx);
@@ -342,7 +488,7 @@ const app = {
         }
     },
 
-    // Simple Render Culling (Optimization)
+    // Culling
     isVisible(x, y, w, h) {
         const sx = x + this.offsetX;
         const sy = y + this.offsetY;
@@ -411,7 +557,6 @@ const app = {
         ctx.save();
         ctx.translate(this.offsetX, this.offsetY);
         
-        // Culling: Wires
         this.wires.forEach(w => {
             if(!this.isVisible(w.fromNode.x, w.fromNode.y, w.fromNode.w, w.fromNode.h) && 
                !this.isVisible(w.toNode.x, w.toNode.y, w.toNode.w, w.toNode.h)) return;
@@ -432,7 +577,6 @@ const app = {
             ctx.moveTo(start.x, start.y); ctx.lineTo(this.tempWire.mx, this.tempWire.my); ctx.stroke();
         }
 
-        // Culling: Nodes
         this.nodes.forEach(n => {
             if(!this.isVisible(n.x, n.y, n.w, n.h)) return;
 
@@ -595,7 +739,7 @@ const app = {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `logicsim_clean_v13_${new Date().toISOString().slice(0,10)}.json`;
+        a.download = `logicsim_hybrid_v14_${new Date().toISOString().slice(0,10)}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
