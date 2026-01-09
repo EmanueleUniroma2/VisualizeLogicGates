@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v9.2 - Clean JSON</title>
+    <title>LogicSim JS v9.3 - Quick Test</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -14,6 +14,7 @@
             --wire-on: #4caf50;
             --clock-color: #8e44ad;
             --danger-color: #d9534f;
+            --test-color: #ff9800; /* Arancione per il tasto Test */
         }
         body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
         
@@ -35,6 +36,8 @@
         }
         .icon-btn:hover { background: var(--accent-color); }
         .icon-btn.delete:hover { background: var(--danger-color); }
+        .icon-btn.test:hover { background: var(--test-color); } /* Stile hover per Test */
+        
         .icon-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
         .lib-actions { display: flex; gap: 5px; margin-bottom: 5px; }
@@ -162,10 +165,9 @@ class CustomChip extends Node {
         this.outs = [];
         for(let i=0; i<this.outputLabels.length; i++) this.outs.push({x:this.w, y: (this.h/(this.outputLabels.length+1))*(i+1)});
 
-        // FIX JSON: Handle both string (legacy) and object (new)
         let data = blueprint.circuitData;
         if (typeof data === 'string') {
-            try { data = JSON.parse(data); } catch(e) { console.error("Error parsing blueprint", e); data = {nodes:[], wires:[]}; }
+            try { data = JSON.parse(data); } catch(e) { data = {nodes:[], wires:[]}; }
         }
 
         const innerNodeMap = {};
@@ -200,7 +202,6 @@ class CustomChip extends Node {
             }
         });
 
-        // INCREASED PASSES: Essential for Ripple Logic to propagate fully
         const passes = Math.max(this.innerNodes.length, 20); 
         for(let pass=0; pass < passes; pass++) {
             this.innerNodes.forEach(n => {
@@ -296,7 +297,6 @@ const app = {
     },
 
     propagate() {
-        // More iterations for main board too
         for(let i=0; i<this.nodes.length * 2 + 10; i++) {
             this.nodes.forEach(n => {
                 const inputs = n.ins.map((_, idx) => {
@@ -506,7 +506,6 @@ const app = {
 
     clear() { this.nodes = []; this.wires = []; this.currentEditName = null; this.offsetX = 0; this.offsetY = 0; },
     
-    // FIX SAVE: Store OBJECTS not STRINGS inside STRINGS
     saveChip() {
         let name = prompt("Nome Chip:", this.currentEditName || "");
         if(!name) return;
@@ -522,7 +521,7 @@ const app = {
             name, 
             inputLabels, outputLabels,
             inputCount: ins.length, outputCount: outs.length,
-            circuitData: { // No JSON.stringify here!
+            circuitData: { 
                 nodes: this.nodes.map(n => ({
                     id: n.id, type: n.type, x: n.x, y: n.y, 
                     blueprint: n.blueprint, state: n.state, 
@@ -567,8 +566,6 @@ const app = {
                     const newLib = JSON.parse(event.target.result);
                     let count = 0;
                     let currentLib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
-                    
-                    // Cleanup imported data if dirty (Matryoshka clean)
                     for(let k in newLib) {
                         if(typeof newLib[k].circuitData === 'string') {
                             try { newLib[k].circuitData = JSON.parse(newLib[k].circuitData); } catch(e){}
@@ -586,6 +583,74 @@ const app = {
         input.click();
     },
 
+    // *** NEW: QUICK TEST FEATURE ***
+    testChip(name) {
+        if(this.nodes.length > 0 && !confirm("Pulisci canvas per il test?")) return;
+        const lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
+        const bp = lib[name];
+        if(!bp) return;
+
+        this.clear();
+        document.getElementById('status').innerText = `Testing: ${name}`;
+
+        // 1. Place Chip in Center
+        const centerX = this.c.width / 2 - 50; 
+        const centerY = this.c.height / 2 - (Math.max(40, Math.max(bp.inputCount, bp.outputCount) * 20 + 20) / 2);
+        const chip = new CustomChip(centerX, centerY, bp);
+        this.nodes.push(chip);
+
+        // 2. Logic to group inputs by prefix (e.g. A0..A7, B0..B7)
+        const inputGroups = {}; 
+        const keys = [];
+        
+        bp.inputLabels.forEach((lbl, i) => {
+            // Regex: Find first sequence of letters (prefix)
+            const match = lbl.match(/^([a-zA-Z]+)/);
+            const key = match ? match[1] : "misc";
+            if(!inputGroups[key]) {
+                inputGroups[key] = [];
+                keys.push(key);
+            }
+            inputGroups[key].push(i);
+        });
+
+        // 3. Create Inputs (Switches) and Wires (Left side)
+        // Iterate columns backwards so A is far left, B closer, etc. (or vice versa based on keys order)
+        keys.forEach((key, colIdx) => {
+            const colX = centerX - 100 - ((keys.length - 1 - colIdx) * 80);
+            
+            inputGroups[key].forEach(pinIdx => {
+                const pinY = chip.ins[pinIdx].y;
+                // Create Input Node
+                const sw = new Node(colX, chip.y + pinY - 10, 'Input', null, bp.inputLabels[pinIdx]);
+                this.nodes.push(sw);
+                
+                // Create Wire
+                this.wires.push({ 
+                    fromNode: sw, fromPin: 0, 
+                    toNode: chip, toPin: pinIdx, value: 0 
+                });
+            });
+        });
+
+        // 4. Create Outputs (Lights) and Wires (Right side)
+        const outX = centerX + chip.w + 100;
+        bp.outputLabels.forEach((lbl, i) => {
+            const pinY = chip.outs[i].y;
+            const light = new Node(outX, chip.y + pinY - 10, 'Output', null, lbl);
+            this.nodes.push(light);
+            
+            this.wires.push({ 
+                fromNode: chip, fromPin: i, 
+                toNode: light, toPin: 0, value: 0 
+            });
+        });
+
+        // Center View
+        this.offsetX = 0; this.offsetY = 0;
+        this.propagate();
+    },
+
     loadLibUI() {
         const list = document.getElementById('custom-list');
         list.innerHTML = '';
@@ -598,15 +663,27 @@ const app = {
             lbl.className = 'comp-label';
             lbl.innerHTML = `<span class="icon-indicator" style="background:#888"></span> ${bp.name}`;
             lbl.onclick = () => this.setMode('Custom', bp);
+            
             const btnGroup = document.createElement('div');
             btnGroup.className = 'btn-group';
+            
+            // Test Button
+            const testBtn = document.createElement('button');
+            testBtn.className = 'icon-btn test'; testBtn.innerHTML = '🧪';
+            testBtn.title = "Test Rapido (Auto-wire)";
+            testBtn.onclick = (e) => { e.stopPropagation(); this.testChip(bp.name); };
+
             const editBtn = document.createElement('button');
             editBtn.className = 'icon-btn'; editBtn.innerHTML = '✏️';
             editBtn.onclick = (e) => { e.stopPropagation(); this.loadForEditing(bp.name); };
+            
             const delBtn = document.createElement('button');
             delBtn.className = 'icon-btn delete'; delBtn.innerHTML = '🗑️';
             delBtn.onclick = (e) => { e.stopPropagation(); this.deleteLibItem(bp.name); };
-            btnGroup.appendChild(editBtn); btnGroup.appendChild(delBtn);
+            
+            btnGroup.appendChild(testBtn); // Added Test Button
+            btnGroup.appendChild(editBtn); 
+            btnGroup.appendChild(delBtn);
             div.appendChild(lbl); div.appendChild(btnGroup); list.appendChild(div);
         }
     },
@@ -627,7 +704,6 @@ const app = {
         this.clear();
         this.currentEditName = name;
         
-        // FIX LOAD: Handle legacy string or new object
         let data = bp.circuitData;
         if(typeof data === 'string') data = JSON.parse(data);
 
