@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v9.3 - Quick Test</title>
+    <title>LogicSim JS v9.4 - Fixed</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -14,7 +14,7 @@
             --wire-on: #4caf50;
             --clock-color: #8e44ad;
             --danger-color: #d9534f;
-            --test-color: #ff9800; /* Arancione per il tasto Test */
+            --test-color: #ff9800;
         }
         body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
         
@@ -36,7 +36,7 @@
         }
         .icon-btn:hover { background: var(--accent-color); }
         .icon-btn.delete:hover { background: var(--danger-color); }
-        .icon-btn.test:hover { background: var(--test-color); } /* Stile hover per Test */
+        .icon-btn.test:hover { background: var(--test-color); }
         
         .icon-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
@@ -86,16 +86,16 @@
         <div class="comp-btn lib-btn" onclick="app.importLib()">⬆ Import</div>
     </div>
     <div id="custom-list"></div>
-    <div class="hint">Doppio Click: Rinomina<br>Drag sfondo: Muovi<br>Tasto DX: Elimina</div>
+    <div class="hint">Double Click: Rename<br>Drag BG: Pan<br>Right Click: Delete</div>
 </div>
 
 <div id="canvas-box">
     <div id="toolbar">
-        <button class="tool-btn" onclick="app.saveChip()">Salva Chip</button>
-        <button class="tool-btn danger" onclick="app.clear()">Pulisci Tutto</button>
+        <button class="tool-btn" onclick="app.saveChip()">Save Chip</button>
+        <button class="tool-btn danger" onclick="app.clear()">Clear All</button>
     </div>
     <canvas id="c"></canvas>
-    <div id="status">Pronto</div>
+    <div id="status">Ready</div>
 </div>
 
 <script>
@@ -152,9 +152,19 @@ class Node {
 class CustomChip extends Node {
     constructor(x, y, blueprint, id = null) {
         super(x, y, 'Custom', id, blueprint.name);
-        this.blueprint = blueprint;
-        this.inputLabels = blueprint.inputLabels || [];
-        this.outputLabels = blueprint.outputLabels || [];
+        
+        // --- CRITICAL FIX START ---
+        // Instead of blindly trusting the passed 'blueprint' (which might be a stale snapshot),
+        // we check if a newer version exists in the library.
+        const lib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
+        const latestBlueprint = lib[blueprint.name];
+        
+        // Use the latest version from library if available, otherwise fallback to snapshot
+        this.blueprint = latestBlueprint || blueprint;
+        // --- CRITICAL FIX END ---
+
+        this.inputLabels = this.blueprint.inputLabels || [];
+        this.outputLabels = this.blueprint.outputLabels || [];
 
         const maxPins = Math.max(this.inputLabels.length, this.outputLabels.length);
         this.h = Math.max(40, maxPins * 20 + 20);
@@ -165,7 +175,7 @@ class CustomChip extends Node {
         this.outs = [];
         for(let i=0; i<this.outputLabels.length; i++) this.outs.push({x:this.w, y: (this.h/(this.outputLabels.length+1))*(i+1)});
 
-        let data = blueprint.circuitData;
+        let data = this.blueprint.circuitData;
         if (typeof data === 'string') {
             try { data = JSON.parse(data); } catch(e) { data = {nodes:[], wires:[]}; }
         }
@@ -173,8 +183,13 @@ class CustomChip extends Node {
         const innerNodeMap = {};
         this.innerNodes = data.nodes.map(n => {
             let node;
-            if (n.type === 'Custom') node = new CustomChip(0, 0, n.blueprint, n.id);
-            else node = new Node(0, 0, n.type, n.id, n.label); 
+            if (n.type === 'Custom') {
+                // Recursive instantiation will now trigger the lookup above for nested chips
+                node = new CustomChip(0, 0, n.blueprint, n.id);
+            }
+            else {
+                node = new Node(0, 0, n.type, n.id, n.label); 
+            }
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1;
             innerNodeMap[node.id] = node;
@@ -202,7 +217,8 @@ class CustomChip extends Node {
             }
         });
 
-        const passes = Math.max(this.innerNodes.length, 20); 
+        // increased passes to handle deep ripple chains
+        const passes = Math.max(this.innerNodes.length * 2, 50); 
         for(let pass=0; pass < passes; pass++) {
             this.innerNodes.forEach(n => {
                 const nodeIns = n.ins.map((_, pinIdx) => {
@@ -257,7 +273,7 @@ const app = {
     setMode(m, bp = null) { 
         this.mode = m; 
         this.blueprint = bp;
-        document.getElementById('status').innerText = m ? `Piazza: ${bp ? bp.name : m}` : "Pronto";
+        document.getElementById('status').innerText = m ? `Placing: ${bp ? bp.name : m}` : "Ready";
     },
 
     getWorldPos(e) {
@@ -297,7 +313,8 @@ const app = {
     },
 
     propagate() {
-        for(let i=0; i<this.nodes.length * 2 + 10; i++) {
+        // Significantly increased propagation loops for Ripple Adder (17 inputs -> deep logic)
+        for(let i=0; i<this.nodes.length * 4 + 50; i++) {
             this.nodes.forEach(n => {
                 const inputs = n.ins.map((_, idx) => {
                     const w = this.wires.find(w => w.toNode === n && w.toPin === idx);
@@ -443,7 +460,7 @@ const app = {
             if(world.x>=n.x && world.x<=n.x+n.w && world.y>=n.y && world.y<=n.y+n.h) {
                 if(n.type === 'Input') { n.state = !n.state; this.propagate(); }
                 else if (n.type === 'Clock') {
-                    const input = prompt(`Frequenza (0.01Hz - 5Hz)`, n.frequency);
+                    const input = prompt(`Frequency (0.01Hz - 5Hz)`, n.frequency);
                     if (input !== null) { const val = parseFloat(input); if(val >= 0.01 && val <= 5) n.frequency = val; }
                 } 
                 else { this.dragNode = n; this.dragOffset = {x: world.x-n.x, y: world.y-n.y}; }
@@ -499,7 +516,7 @@ const app = {
         const nIdx = this.nodes.findIndex(n => x>=n.x && x<=n.x+n.w && y>=n.y && y<=n.y+n.h);
         if(nIdx !== -1) {
             const node = this.nodes[nIdx];
-            const newName = prompt("Rinomina componente:", node.label);
+            const newName = prompt("Rename component:", node.label);
             if(newName && newName.trim() !== "") { node.label = newName.trim(); }
         }
     },
@@ -507,10 +524,10 @@ const app = {
     clear() { this.nodes = []; this.wires = []; this.currentEditName = null; this.offsetX = 0; this.offsetY = 0; },
     
     saveChip() {
-        let name = prompt("Nome Chip:", this.currentEditName || "");
+        let name = prompt("Chip Name:", this.currentEditName || "");
         if(!name) return;
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
-        if(lib[name] && !confirm("Sovrascrivere?")) return;
+        if(lib[name] && !confirm("Overwrite existing chip?")) return;
         
         const ins = this.nodes.filter(n=>n.type==='Input').sort((a,b)=>a.y-b.y);
         const outs = this.nodes.filter(n=>n.type==='Output').sort((a,b)=>a.y-b.y);
@@ -541,12 +558,12 @@ const app = {
 
     exportLib() {
         const lib = localStorage.getItem('ls_lib');
-        if(!lib || lib === '{}') { alert("Nessun chip salvato."); return; }
+        if(!lib || lib === '{}') { alert("No chips to export."); return; }
         const blob = new Blob([lib], {type: 'application/json'});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `logicsim_clean_${new Date().toISOString().slice(0,10)}.json`;
+        a.download = `logicsim_fixed_${new Date().toISOString().slice(0,10)}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -575,17 +592,17 @@ const app = {
                     }
                     localStorage.setItem('ls_lib', JSON.stringify(currentLib));
                     this.loadLibUI();
-                    alert(`Importati ${count} chip!`);
-                } catch(err) { alert("Errore file: " + err.message); }
+                    alert(`Imported ${count} chips successfully!`);
+                } catch(err) { alert("Import Error: " + err.message); }
             };
             reader.readAsText(file);
         };
         input.click();
     },
 
-    // *** NEW: QUICK TEST FEATURE ***
+    // *** TEST FEATURE ***
     testChip(name) {
-        if(this.nodes.length > 0 && !confirm("Pulisci canvas per il test?")) return;
+        if(this.nodes.length > 0 && !confirm("Clear canvas for testing?")) return;
         const lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
         const bp = lib[name];
         if(!bp) return;
@@ -593,18 +610,17 @@ const app = {
         this.clear();
         document.getElementById('status').innerText = `Testing: ${name}`;
 
-        // 1. Place Chip in Center
+        // 1. Place Chip
         const centerX = this.c.width / 2 - 50; 
         const centerY = this.c.height / 2 - (Math.max(40, Math.max(bp.inputCount, bp.outputCount) * 20 + 20) / 2);
         const chip = new CustomChip(centerX, centerY, bp);
         this.nodes.push(chip);
 
-        // 2. Logic to group inputs by prefix (e.g. A0..A7, B0..B7)
+        // 2. Group Inputs (A0..A7)
         const inputGroups = {}; 
         const keys = [];
         
         bp.inputLabels.forEach((lbl, i) => {
-            // Regex: Find first sequence of letters (prefix)
             const match = lbl.match(/^([a-zA-Z]+)/);
             const key = match ? match[1] : "misc";
             if(!inputGroups[key]) {
@@ -614,18 +630,15 @@ const app = {
             inputGroups[key].push(i);
         });
 
-        // 3. Create Inputs (Switches) and Wires (Left side)
-        // Iterate columns backwards so A is far left, B closer, etc. (or vice versa based on keys order)
+        // 3. Create Inputs
         keys.forEach((key, colIdx) => {
             const colX = centerX - 100 - ((keys.length - 1 - colIdx) * 80);
             
             inputGroups[key].forEach(pinIdx => {
                 const pinY = chip.ins[pinIdx].y;
-                // Create Input Node
                 const sw = new Node(colX, chip.y + pinY - 10, 'Input', null, bp.inputLabels[pinIdx]);
                 this.nodes.push(sw);
                 
-                // Create Wire
                 this.wires.push({ 
                     fromNode: sw, fromPin: 0, 
                     toNode: chip, toPin: pinIdx, value: 0 
@@ -633,7 +646,7 @@ const app = {
             });
         });
 
-        // 4. Create Outputs (Lights) and Wires (Right side)
+        // 4. Create Outputs
         const outX = centerX + chip.w + 100;
         bp.outputLabels.forEach((lbl, i) => {
             const pinY = chip.outs[i].y;
@@ -646,7 +659,6 @@ const app = {
             });
         });
 
-        // Center View
         this.offsetX = 0; this.offsetY = 0;
         this.propagate();
     },
@@ -667,10 +679,9 @@ const app = {
             const btnGroup = document.createElement('div');
             btnGroup.className = 'btn-group';
             
-            // Test Button
             const testBtn = document.createElement('button');
             testBtn.className = 'icon-btn test'; testBtn.innerHTML = '🧪';
-            testBtn.title = "Test Rapido (Auto-wire)";
+            testBtn.title = "Quick Test (Auto-wire)";
             testBtn.onclick = (e) => { e.stopPropagation(); this.testChip(bp.name); };
 
             const editBtn = document.createElement('button');
@@ -681,7 +692,7 @@ const app = {
             delBtn.className = 'icon-btn delete'; delBtn.innerHTML = '🗑️';
             delBtn.onclick = (e) => { e.stopPropagation(); this.deleteLibItem(bp.name); };
             
-            btnGroup.appendChild(testBtn); // Added Test Button
+            btnGroup.appendChild(testBtn);
             btnGroup.appendChild(editBtn); 
             btnGroup.appendChild(delBtn);
             div.appendChild(lbl); div.appendChild(btnGroup); list.appendChild(div);
@@ -689,7 +700,7 @@ const app = {
     },
 
     deleteLibItem(name) {
-        if(!confirm(`Eliminare "${name}"?`)) return;
+        if(!confirm(`Delete "${name}"?`)) return;
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
         delete lib[name];
         localStorage.setItem('ls_lib', JSON.stringify(lib));
@@ -697,7 +708,7 @@ const app = {
     },
 
     loadForEditing(name) {
-        if(this.nodes.length > 0 && !confirm("Pulisci canvas?")) return;
+        if(this.nodes.length > 0 && !confirm("Clear canvas?")) return;
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
         const bp = lib[name];
         if(!bp) return;
