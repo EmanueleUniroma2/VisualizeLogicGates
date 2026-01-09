@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v10 - CPU Ready</title>
+    <title>LogicSim JS v11 - Turbo Optimized</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -153,7 +153,7 @@ class CustomChip extends Node {
     constructor(x, y, blueprint, id = null) {
         super(x, y, 'Custom', id, blueprint.name);
         
-        // 1. DYNAMIC LOOKUP: Always fetch the freshest blueprint from storage
+        // 1. DYNAMIC LOOKUP
         const lib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
         const latestBlueprint = lib[blueprint.name];
         this.blueprint = latestBlueprint || blueprint;
@@ -186,23 +186,30 @@ class CustomChip extends Node {
             return node;
         });
 
-        this.innerWires = data.wires.map(w => ({
+        const innerWires = data.wires.map(w => ({
             fromNode: innerNodeMap[w.fromNodeId], fromPin: w.fromPin,
             toNode: innerNodeMap[w.toNodeId], toPin: w.toPin
         })).filter(w => w.fromNode && w.toNode);
 
+        // --- TURBO OPTIMIZATION: Pre-calculate Links ---
+        // Instead of searching arrays every tick, we bake the connection directly into the node.
+        // This makes lookup O(1) instead of O(Wires).
+        this.innerNodes.forEach(n => {
+            n.fastInputLinks = n.ins.map((_, pinIdx) => {
+                const w = innerWires.find(wire => wire.toNode === n && wire.toPin === pinIdx);
+                if(w) return { srcNode: w.fromNode, srcPin: w.fromPin };
+                return null; 
+            });
+        });
+
         // 2. CACHING SETUP
-        // Detect if this chip contains any clocks recursively.
-        // If NO clock is inside, we can cache results aggressively (Memoization).
         this.hasClock = this.innerNodes.some(n => n.type === 'Clock' || (n.type === 'Custom' && n.hasClock));
         this.lastInputs = null;
         this.lastOutputs = null;
     }
 
     compute(inputs) {
-        // 3. MEMOIZATION OPTIMIZATION
-        // If inputs haven't changed and there are no internal clocks, return cached result.
-        // This stops infinite recursion in complex nested circuits.
+        // 3. MEMOIZATION
         if (this.lastInputs && !this.hasClock) {
             let changed = false;
             if(this.lastInputs.length !== inputs.length) changed = true;
@@ -231,16 +238,16 @@ class CustomChip extends Node {
         }
 
         // Logic Pass
-        // With memoization, we don't need excessive passes for stable circuits.
         const passes = this.innerNodes.length + 5; 
         for(let pass=0; pass < passes; pass++) {
             this.innerNodes.forEach(n => {
-                const nodeIns = n.ins.map((_, pinIdx) => {
-                    const wire = this.innerWires.find(w => w.toNode === n && w.toPin === pinIdx);
-                    if(!wire) return 0;
-                    const src = wire.fromNode;
-                    return src.lastResult ? src.lastResult[wire.fromPin] : 0;
+                // --- FAST LOOKUP ---
+                // No array searching here anymore!
+                const nodeIns = n.fastInputLinks.map(link => {
+                    if(!link) return 0;
+                    return link.srcNode.lastResult ? link.srcNode.lastResult[link.srcPin] : 0;
                 });
+                
                 n.lastResult = n.compute(nodeIns);
                 if(n.type === 'Output') n.currentValue = nodeIns[0];
             });
@@ -249,7 +256,6 @@ class CustomChip extends Node {
         const oNodes = this.innerNodes.filter(n => n.type === 'Output').sort((a,b)=>a.y - b.y);
         const result = oNodes.map(n => n.currentValue || 0);
 
-        // Save to cache
         this.lastInputs = [...inputs];
         this.lastOutputs = result;
         
@@ -323,7 +329,6 @@ const app = {
                     changed = true;
                 }
             }
-            // Efficient check using cached property
             if (n.type === 'Custom' && n.hasClock) changed = true;
         });
         if (changed) this.propagate();
@@ -331,8 +336,6 @@ const app = {
 
     propagate() {
         // Optimized propagation loop. 
-        // With memoization inside CustomChip, we can run fewer "meta-loops" 
-        // because chips settle instantly.
         const passes = Math.min(this.nodes.length * 2 + 20, 100); 
         
         for(let i=0; i<passes; i++) {
@@ -350,8 +353,7 @@ const app = {
         }
     },
 
-    // 4. RENDERING OPTIMIZATION: Viewport Culling
-    // Checks if a bounding box is visible on screen.
+    // Viewport Culling
     isVisible(x, y, w, h) {
         const sx = x + this.offsetX;
         const sy = y + this.offsetY;
@@ -421,9 +423,7 @@ const app = {
         ctx.translate(this.offsetX, this.offsetY);
         
         // Culling: Wires
-        // Only draw wires that are somewhat visible (simple check via nodes)
         this.wires.forEach(w => {
-            // Check if either start or end is visible
             if(!this.isVisible(w.fromNode.x, w.fromNode.y, w.fromNode.w, w.fromNode.h) && 
                !this.isVisible(w.toNode.x, w.toNode.y, w.toNode.w, w.toNode.h)) return;
 
@@ -445,7 +445,7 @@ const app = {
 
         // Culling: Nodes
         this.nodes.forEach(n => {
-            if(!this.isVisible(n.x, n.y, n.w, n.h)) return; // Skip drawing off-screen nodes
+            if(!this.isVisible(n.x, n.y, n.w, n.h)) return;
 
             this.drawGateShape(ctx, n);
             ctx.fillStyle = '#333'; 
@@ -479,7 +479,6 @@ const app = {
 
     hitTestPin(mx, my) {
         for(let n of this.nodes) {
-            // Optimization: Skip hit testing on off-screen nodes (rough check)
             if(!this.isVisible(n.x, n.y, n.w, n.h)) continue;
 
             for(let i=0; i<n.ins.length; i++) {
@@ -607,7 +606,7 @@ const app = {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `logicsim_cpu_ready_${new Date().toISOString().slice(0,10)}.json`;
+        a.download = `logicsim_optimized_${new Date().toISOString().slice(0,10)}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
