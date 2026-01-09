@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v9.0 - Infinite Canvas</title>
+    <title>LogicSim JS v9.1 - Import/Export</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -14,6 +14,7 @@
             --wire-on: #4caf50;
             --clock-color: #8e44ad;
             --danger-color: #d9534f;
+            --success-color: #28a745;
         }
         body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
         
@@ -38,11 +39,16 @@
         .icon-btn.delete:hover { background: var(--danger-color); }
         .icon-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
+        /* Azioni Library */
+        .lib-actions { display: flex; gap: 5px; margin-bottom: 5px; }
+        .lib-btn { flex: 1; text-align: center; justify-content: center; font-size: 0.85rem; background: #3a3a3a; }
+        .lib-btn:hover { background: #505050; }
+
         /* Canvas */
         #canvas-box { flex-grow: 1; position: relative; overflow: hidden; cursor: grab; }
         #canvas-box:active { cursor: grabbing; }
 
-        /* Grid Background managed via CSS for performance */
+        /* Grid Background */
         #c { display: block; background-color: var(--bg-color); background-image: radial-gradient(#444 1px, transparent 1px); background-size: 20px 20px; }
         
         #toolbar { position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; z-index: 10;}
@@ -77,6 +83,11 @@
     <div class="comp-btn" onclick="app.setMode('XOR')"><div class="comp-label">XOR</div></div>
 
     <h3>My Chips</h3>
+    <div class="lib-actions">
+        <div class="comp-btn lib-btn" onclick="app.exportLib()">⬇ Export</div>
+        <div class="comp-btn lib-btn" onclick="app.importLib()">⬆ Import</div>
+    </div>
+    
     <div id="custom-list"></div>
     <div class="hint">Doppio Click: Rinomina<br>Drag sfondo: Muovi<br>Tasto DX: Elimina</div>
 </div>
@@ -257,7 +268,6 @@ const app = {
     },
 
     // --- COORDINATE SYSTEMS ---
-    // Screen -> World (for click detection)
     getWorldPos(e) {
         const r = this.c.getBoundingClientRect();
         return {
@@ -428,13 +438,12 @@ const app = {
             drawP(n.ins, true); drawP(n.outs, false);
         });
         
-        ctx.restore(); // Restore to screen coords for overlay? (none yet)
+        ctx.restore(); 
         requestAnimationFrame(() => this.loop());
     },
 
     // --- INTERACTION ---
     hitTestPin(mx, my) {
-        // mx, my are World Coordinates
         for(let n of this.nodes) {
             for(let i=0; i<n.ins.length; i++) {
                 const p = n.ins[i];
@@ -475,11 +484,9 @@ const app = {
         if(e.button === 2) return;
         const world = this.getWorldPos(e);
         
-        // 1. Hit Pin?
         const pin = this.hitTestPin(world.x, world.y);
         if(pin) { this.tempWire = {...pin, mx:world.x, my:world.y}; return; }
 
-        // 2. Hit Node?
         for(let i = this.nodes.length-1; i>=0; i--) {
             const n = this.nodes[i];
             if(world.x>=n.x && world.x<=n.x+n.w && world.y>=n.y && world.y<=n.y+n.h) {
@@ -493,13 +500,11 @@ const app = {
             }
         }
         
-        // 3. Place Node?
         if(this.mode) {
             this.addNode(world.x-30, world.y-20);
             return;
         }
 
-        // 4. PANNING START
         this.isPanning = true;
         this.lastMouse = {x: e.clientX, y: e.clientY};
         document.body.style.cursor = 'grabbing';
@@ -545,10 +550,10 @@ const app = {
         this.dragNode = null;
     },
 
-    // --- SAVE/LOAD ---
+    // --- SAVE/LOAD/EXPORT ---
     clear() { 
         this.nodes = []; this.wires = []; this.currentEditName = null; 
-        this.offsetX = 0; this.offsetY = 0; // Reset view
+        this.offsetX = 0; this.offsetY = 0;
     },
     
     saveChip() {
@@ -583,6 +588,58 @@ const app = {
         localStorage.setItem('ls_lib', JSON.stringify(lib));
         this.loadLibUI();
         this.currentEditName = name;
+    },
+
+    // *** NUOVO: Export Library ***
+    exportLib() {
+        const lib = localStorage.getItem('ls_lib');
+        if(!lib || lib === '{}') {
+            alert("Nessun chip salvato da esportare.");
+            return;
+        }
+        const blob = new Blob([lib], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `logicsim_chips_${new Date().toISOString().slice(0,10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    },
+
+    // *** NUOVO: Import Library ***
+    importLib() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = e => {
+            const file = e.target.files[0];
+            if(!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = event => {
+                try {
+                    const newLib = JSON.parse(event.target.result);
+                    if(typeof newLib !== 'object') throw new Error("Formato non valido");
+                    
+                    const count = Object.keys(newLib).length;
+                    if(count === 0) { alert("File vuoto o non valido."); return; }
+
+                    if(confirm(`Trovati ${count} chip nel file.\nVuoi unirli alla libreria corrente?\n(I chip con lo stesso nome verranno sovrascritti)`)) {
+                        let currentLib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
+                        const mergedLib = { ...currentLib, ...newLib };
+                        localStorage.setItem('ls_lib', JSON.stringify(mergedLib));
+                        this.loadLibUI();
+                        alert("Importazione completata con successo!");
+                    }
+                } catch(err) {
+                    alert("Errore durante l'importazione: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        };
+        input.click();
     },
 
     loadLibUI() {
@@ -650,7 +707,6 @@ const app = {
             this.nodes.push(node);
             nodeMap[node.id] = node;
 
-            // Update Bounds
             if(n.x < minX) minX = n.x;
             if(n.y < minY) minY = n.y;
             if(n.x > maxX) maxX = n.x;
@@ -662,9 +718,8 @@ const app = {
             if(from && to) this.wires.push({ fromNode: from, fromPin: w.fromPin, toNode: to, toPin: w.toPin, value: 0 });
         });
         
-        // Auto Center Logic
         if(this.nodes.length > 0) {
-            const circW = maxX - minX + 100; // +100 approx width of last node
+            const circW = maxX - minX + 100; 
             const circH = maxY - minY + 60;
             const circCX = minX + circW / 2;
             const circCY = minY + circH / 2;
