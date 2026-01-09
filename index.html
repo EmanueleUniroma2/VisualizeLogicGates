@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LogicSim JS v9.1 - Import/Export</title>
+    <title>LogicSim JS v9.2 - Clean JSON</title>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -14,11 +14,9 @@
             --wire-on: #4caf50;
             --clock-color: #8e44ad;
             --danger-color: #d9534f;
-            --success-color: #28a745;
         }
         body { margin: 0; background: var(--bg-color); color: var(--text-color); font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; overflow: hidden; }
         
-        /* Sidebar */
         #sidebar { width: 240px; background: var(--panel-color); padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; z-index: 10; box-shadow: 2px 0 5px rgba(0,0,0,0.5);}
         h3 { font-size: 0.9rem; color: #888; text-transform: uppercase; margin: 15px 0 5px 0; border-bottom: 1px solid #444; }
         
@@ -39,16 +37,13 @@
         .icon-btn.delete:hover { background: var(--danger-color); }
         .icon-indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 
-        /* Azioni Library */
         .lib-actions { display: flex; gap: 5px; margin-bottom: 5px; }
         .lib-btn { flex: 1; text-align: center; justify-content: center; font-size: 0.85rem; background: #3a3a3a; }
         .lib-btn:hover { background: #505050; }
 
-        /* Canvas */
         #canvas-box { flex-grow: 1; position: relative; overflow: hidden; cursor: grab; }
         #canvas-box:active { cursor: grabbing; }
 
-        /* Grid Background */
         #c { display: block; background-color: var(--bg-color); background-image: radial-gradient(#444 1px, transparent 1px); background-size: 20px 20px; }
         
         #toolbar { position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; z-index: 10;}
@@ -87,7 +82,6 @@
         <div class="comp-btn lib-btn" onclick="app.exportLib()">⬇ Export</div>
         <div class="comp-btn lib-btn" onclick="app.importLib()">⬆ Import</div>
     </div>
-    
     <div id="custom-list"></div>
     <div class="hint">Doppio Click: Rinomina<br>Drag sfondo: Muovi<br>Tasto DX: Elimina</div>
 </div>
@@ -102,10 +96,8 @@
 </div>
 
 <script>
-// --- UTILS ---
 const dist = (x1, y1, x2, y2) => Math.hypot(x2-x1, y2-y1);
 
-// --- CLASSES ---
 class Node {
     constructor(x, y, type, id = null, label = null) {
         this.id = id || Math.random().toString(36).substr(2, 9);
@@ -113,15 +105,12 @@ class Node {
         this.type = type;
         this.label = label || type;
         this.w = 60; this.h = 40;
-        
         this.state = 0; 
         this.currentValue = 0; 
-        
         if (this.type === 'Clock') {
             this.frequency = 1; 
             this.lastTick = Date.now();
         }
-
         this.ins = []; this.outs = [];
         this.setupPins();
     }
@@ -173,9 +162,13 @@ class CustomChip extends Node {
         this.outs = [];
         for(let i=0; i<this.outputLabels.length; i++) this.outs.push({x:this.w, y: (this.h/(this.outputLabels.length+1))*(i+1)});
 
-        const data = JSON.parse(blueprint.circuitData);
-        const innerNodeMap = {};
+        // FIX JSON: Handle both string (legacy) and object (new)
+        let data = blueprint.circuitData;
+        if (typeof data === 'string') {
+            try { data = JSON.parse(data); } catch(e) { console.error("Error parsing blueprint", e); data = {nodes:[], wires:[]}; }
+        }
 
+        const innerNodeMap = {};
         this.innerNodes = data.nodes.map(n => {
             let node;
             if (n.type === 'Custom') node = new CustomChip(0, 0, n.blueprint, n.id);
@@ -207,7 +200,9 @@ class CustomChip extends Node {
             }
         });
 
-        for(let pass=0; pass < this.innerNodes.length * 2; pass++) {
+        // INCREASED PASSES: Essential for Ripple Logic to propagate fully
+        const passes = Math.max(this.innerNodes.length, 20); 
+        for(let pass=0; pass < passes; pass++) {
             this.innerNodes.forEach(n => {
                 const nodeIns = n.ins.map((_, pinIdx) => {
                     const wire = this.innerWires.find(w => w.toNode === n && w.toPin === pinIdx);
@@ -225,7 +220,6 @@ class CustomChip extends Node {
     }
 }
 
-// --- APP CONTROLLER ---
 const app = {
     c: document.getElementById('c'),
     ctx: document.getElementById('c').getContext('2d'),
@@ -236,8 +230,6 @@ const app = {
     tempWire: null,
     hoverPin: null,
     currentEditName: null, 
-    
-    // Viewport / Pan Logic
     offsetX: 0,
     offsetY: 0,
     isPanning: false,
@@ -267,7 +259,6 @@ const app = {
         document.getElementById('status').innerText = m ? `Piazza: ${bp ? bp.name : m}` : "Pronto";
     },
 
-    // --- COORDINATE SYSTEMS ---
     getWorldPos(e) {
         const r = this.c.getBoundingClientRect();
         return {
@@ -305,7 +296,8 @@ const app = {
     },
 
     propagate() {
-        for(let i=0; i<this.nodes.length + 5; i++) {
+        // More iterations for main board too
+        for(let i=0; i<this.nodes.length * 2 + 10; i++) {
             this.nodes.forEach(n => {
                 const inputs = n.ins.map((_, idx) => {
                     const w = this.wires.find(w => w.toNode === n && w.toPin === idx);
@@ -320,16 +312,13 @@ const app = {
         }
     },
 
-    // --- RENDERING ---
     drawGateShape(ctx, n) {
         ctx.beginPath();
         const x = n.x, y = n.y, w = n.w, h = n.h;
-
         if(n.type === 'Custom' || n.type === 'Input' || n.type === 'Output' || n.type === 'Clock') {
             ctx.rect(x, y, w, h);
             return;
         }
-
         if (n.type === 'AND' || n.type === 'NAND') {
             ctx.moveTo(x, y); ctx.lineTo(x + w/2, y);
             ctx.arc(x + w/2, y + h/2, h/2, -Math.PI/2, Math.PI/2);
@@ -368,7 +357,6 @@ const app = {
             if (n.type === 'NOT') bx = n.x + n.w - 5;
             ctx.arc(bx, by, 4, 0, Math.PI*2); ctx.fill(); ctx.stroke();
         }
-        
         if (n.type === 'Custom') {
             ctx.fillStyle = '#fff'; ctx.font = '10px monospace';
             ctx.textAlign = 'left';
@@ -381,17 +369,11 @@ const app = {
     loop() {
         this.updateClocks();
         const ctx = this.ctx;
-        
-        // Sync Grid with Offset
         this.c.style.backgroundPosition = `${this.offsetX}px ${this.offsetY}px`;
-
         ctx.clearRect(0,0, this.c.width, this.c.height);
-        
-        // Apply Camera Transform
         ctx.save();
         ctx.translate(this.offsetX, this.offsetY);
         
-        // Wires
         this.wires.forEach(w => {
             const start = {x: w.fromNode.x + w.fromNode.outs[w.fromPin].x, y: w.fromNode.y + w.fromNode.outs[w.fromPin].y};
             const end = {x: w.toNode.x + w.toNode.ins[w.toPin].x, y: w.toNode.y + w.toNode.ins[w.toPin].y};
@@ -409,7 +391,6 @@ const app = {
             ctx.moveTo(start.x, start.y); ctx.lineTo(this.tempWire.mx, this.tempWire.my); ctx.stroke();
         }
 
-        // Nodes
         this.nodes.forEach(n => {
             this.drawGateShape(ctx, n);
             ctx.fillStyle = '#333'; 
@@ -418,16 +399,13 @@ const app = {
             ctx.lineWidth = 2;
             ctx.fill(); ctx.stroke();
             this.drawDecorations(ctx, n);
-
             ctx.fillStyle = '#aaa'; ctx.textAlign = 'center'; ctx.font = '11px sans-serif';
             let label = n.label;
             if(n.type === 'Clock') label = `${n.frequency}Hz`;
             ctx.fillText(label, n.x+n.w/2, n.y + n.h + 15);
-
             if(n.type === 'Input') { ctx.fillStyle = n.state ? '#0f0' : '#222'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Clock') { ctx.fillStyle = n.state ? '#d2a4ff' : '#4a235a'; ctx.fillRect(n.x+10, n.y+10, 20, 20); }
             if(n.type === 'Output') { ctx.fillStyle = n.currentValue ? '#ff0' : '#220'; ctx.beginPath(); ctx.arc(n.x+n.w/2, n.y+n.h/2, 10, 0, Math.PI*2); ctx.fill(); }
-
             const drawP = (pins, isInput) => pins.forEach((p, i) => {
                 const px = n.x + p.x, py = n.y + p.y;
                 const hov = this.hoverPin && this.hoverPin.node === n && this.hoverPin.idx === i && this.hoverPin.isInput === isInput;
@@ -437,12 +415,10 @@ const app = {
             });
             drawP(n.ins, true); drawP(n.outs, false);
         });
-        
         ctx.restore(); 
         requestAnimationFrame(() => this.loop());
     },
 
-    // --- INTERACTION ---
     hitTestPin(mx, my) {
         for(let n of this.nodes) {
             for(let i=0; i<n.ins.length; i++) {
@@ -455,6 +431,56 @@ const app = {
             }
         }
         return null;
+    },
+
+    handleDown(e) {
+        if(e.button === 2) return;
+        const world = this.getWorldPos(e);
+        const pin = this.hitTestPin(world.x, world.y);
+        if(pin) { this.tempWire = {...pin, mx:world.x, my:world.y}; return; }
+        for(let i = this.nodes.length-1; i>=0; i--) {
+            const n = this.nodes[i];
+            if(world.x>=n.x && world.x<=n.x+n.w && world.y>=n.y && world.y<=n.y+n.h) {
+                if(n.type === 'Input') { n.state = !n.state; this.propagate(); }
+                else if (n.type === 'Clock') {
+                    const input = prompt(`Frequenza (0.01Hz - 5Hz)`, n.frequency);
+                    if (input !== null) { const val = parseFloat(input); if(val >= 0.01 && val <= 5) n.frequency = val; }
+                } 
+                else { this.dragNode = n; this.dragOffset = {x: world.x-n.x, y: world.y-n.y}; }
+                return;
+            }
+        }
+        if(this.mode) { this.addNode(world.x-30, world.y-20); return; }
+        this.isPanning = true; this.lastMouse = {x: e.clientX, y: e.clientY}; document.body.style.cursor = 'grabbing';
+    },
+
+    handleMove(e) {
+        const world = this.getWorldPos(e);
+        this.hoverPin = this.hitTestPin(world.x, world.y);
+        if(this.isPanning) {
+            this.offsetX += e.clientX - this.lastMouse.x;
+            this.offsetY += e.clientY - this.lastMouse.y;
+            this.lastMouse = {x: e.clientX, y: e.clientY}; return;
+        }
+        if(this.dragNode) { this.dragNode.x = world.x - this.dragOffset.x; this.dragNode.y = world.y - this.dragOffset.y; this.propagate(); }
+        if(this.tempWire) { this.tempWire.mx = world.x; this.tempWire.my = world.y; }
+    },
+
+    handleUp(e) {
+        this.isPanning = false; document.body.style.cursor = 'default';
+        const world = this.getWorldPos(e);
+        if(this.tempWire) {
+            const pin = this.hitTestPin(world.x, world.y);
+            if(pin && pin.node !== this.tempWire.node && pin.isInput !== this.tempWire.isInput) {
+                const from = this.tempWire.isInput ? pin : this.tempWire;
+                const to = this.tempWire.isInput ? this.tempWire : pin;
+                this.wires = this.wires.filter(w => !(w.toNode === to.node && w.toPin === to.idx));
+                this.wires.push({ fromNode: from.node, fromPin: from.idx, toNode: to.node, toPin: to.idx, value: 0 });
+                this.propagate();
+            }
+            this.tempWire = null;
+        }
+        this.dragNode = null;
     },
 
     handleRightClick(e) {
@@ -474,97 +500,21 @@ const app = {
         if(nIdx !== -1) {
             const node = this.nodes[nIdx];
             const newName = prompt("Rinomina componente:", node.label);
-            if(newName && newName.trim() !== "") {
-                node.label = newName.trim();
-            }
+            if(newName && newName.trim() !== "") { node.label = newName.trim(); }
         }
     },
 
-    handleDown(e) {
-        if(e.button === 2) return;
-        const world = this.getWorldPos(e);
-        
-        const pin = this.hitTestPin(world.x, world.y);
-        if(pin) { this.tempWire = {...pin, mx:world.x, my:world.y}; return; }
-
-        for(let i = this.nodes.length-1; i>=0; i--) {
-            const n = this.nodes[i];
-            if(world.x>=n.x && world.x<=n.x+n.w && world.y>=n.y && world.y<=n.y+n.h) {
-                if(n.type === 'Input') { n.state = !n.state; this.propagate(); }
-                else if (n.type === 'Clock') {
-                    const input = prompt(`Frequenza (0.01Hz - 5Hz)`, n.frequency);
-                    if (input !== null) { const val = parseFloat(input); if(val >= 0.01 && val <= 5) n.frequency = val; }
-                } 
-                else { this.dragNode = n; this.dragOffset = {x: world.x-n.x, y: world.y-n.y}; }
-                return;
-            }
-        }
-        
-        if(this.mode) {
-            this.addNode(world.x-30, world.y-20);
-            return;
-        }
-
-        this.isPanning = true;
-        this.lastMouse = {x: e.clientX, y: e.clientY};
-        document.body.style.cursor = 'grabbing';
-    },
-
-    handleMove(e) {
-        const world = this.getWorldPos(e);
-        this.hoverPin = this.hitTestPin(world.x, world.y);
-
-        if(this.isPanning) {
-            const dx = e.clientX - this.lastMouse.x;
-            const dy = e.clientY - this.lastMouse.y;
-            this.offsetX += dx;
-            this.offsetY += dy;
-            this.lastMouse = {x: e.clientX, y: e.clientY};
-            return;
-        }
-
-        if(this.dragNode) { 
-            this.dragNode.x = world.x - this.dragOffset.x; 
-            this.dragNode.y = world.y - this.dragOffset.y; 
-            this.propagate(); 
-        }
-        if(this.tempWire) { this.tempWire.mx = world.x; this.tempWire.my = world.y; }
-    },
-
-    handleUp(e) {
-        this.isPanning = false;
-        document.body.style.cursor = 'default';
-
-        const world = this.getWorldPos(e);
-        if(this.tempWire) {
-            const pin = this.hitTestPin(world.x, world.y);
-            if(pin && pin.node !== this.tempWire.node && pin.isInput !== this.tempWire.isInput) {
-                const from = this.tempWire.isInput ? pin : this.tempWire;
-                const to = this.tempWire.isInput ? this.tempWire : pin;
-                this.wires = this.wires.filter(w => !(w.toNode === to.node && w.toPin === to.idx));
-                this.wires.push({ fromNode: from.node, fromPin: from.idx, toNode: to.node, toPin: to.idx, value: 0 });
-                this.propagate();
-            }
-            this.tempWire = null;
-        }
-        this.dragNode = null;
-    },
-
-    // --- SAVE/LOAD/EXPORT ---
-    clear() { 
-        this.nodes = []; this.wires = []; this.currentEditName = null; 
-        this.offsetX = 0; this.offsetY = 0;
-    },
+    clear() { this.nodes = []; this.wires = []; this.currentEditName = null; this.offsetX = 0; this.offsetY = 0; },
     
+    // FIX SAVE: Store OBJECTS not STRINGS inside STRINGS
     saveChip() {
         let name = prompt("Nome Chip:", this.currentEditName || "");
         if(!name) return;
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
         if(lib[name] && !confirm("Sovrascrivere?")) return;
-
+        
         const ins = this.nodes.filter(n=>n.type==='Input').sort((a,b)=>a.y-b.y);
         const outs = this.nodes.filter(n=>n.type==='Output').sort((a,b)=>a.y-b.y);
-        
         const inputLabels = ins.map(n => n.label);
         const outputLabels = outs.map(n => n.label);
 
@@ -572,7 +522,7 @@ const app = {
             name, 
             inputLabels, outputLabels,
             inputCount: ins.length, outputCount: outs.length,
-            circuitData: JSON.stringify({
+            circuitData: { // No JSON.stringify here!
                 nodes: this.nodes.map(n => ({
                     id: n.id, type: n.type, x: n.x, y: n.y, 
                     blueprint: n.blueprint, state: n.state, 
@@ -582,7 +532,7 @@ const app = {
                     fromNodeId: w.fromNode.id, fromPin: w.fromPin, 
                     toNodeId: w.toNode.id, toPin: w.toPin
                 }))
-            })
+            }
         };
         lib[name] = data;
         localStorage.setItem('ls_lib', JSON.stringify(lib));
@@ -590,25 +540,20 @@ const app = {
         this.currentEditName = name;
     },
 
-    // *** NUOVO: Export Library ***
     exportLib() {
         const lib = localStorage.getItem('ls_lib');
-        if(!lib || lib === '{}') {
-            alert("Nessun chip salvato da esportare.");
-            return;
-        }
+        if(!lib || lib === '{}') { alert("Nessun chip salvato."); return; }
         const blob = new Blob([lib], {type: 'application/json'});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `logicsim_chips_${new Date().toISOString().slice(0,10)}.json`;
+        a.download = `logicsim_clean_${new Date().toISOString().slice(0,10)}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     },
 
-    // *** NUOVO: Import Library ***
     importLib() {
         const input = document.createElement('input');
         input.type = 'file';
@@ -616,26 +561,25 @@ const app = {
         input.onchange = e => {
             const file = e.target.files[0];
             if(!file) return;
-            
             const reader = new FileReader();
             reader.onload = event => {
                 try {
                     const newLib = JSON.parse(event.target.result);
-                    if(typeof newLib !== 'object') throw new Error("Formato non valido");
+                    let count = 0;
+                    let currentLib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
                     
-                    const count = Object.keys(newLib).length;
-                    if(count === 0) { alert("File vuoto o non valido."); return; }
-
-                    if(confirm(`Trovati ${count} chip nel file.\nVuoi unirli alla libreria corrente?\n(I chip con lo stesso nome verranno sovrascritti)`)) {
-                        let currentLib = JSON.parse(localStorage.getItem('ls_lib') || '{}');
-                        const mergedLib = { ...currentLib, ...newLib };
-                        localStorage.setItem('ls_lib', JSON.stringify(mergedLib));
-                        this.loadLibUI();
-                        alert("Importazione completata con successo!");
+                    // Cleanup imported data if dirty (Matryoshka clean)
+                    for(let k in newLib) {
+                        if(typeof newLib[k].circuitData === 'string') {
+                            try { newLib[k].circuitData = JSON.parse(newLib[k].circuitData); } catch(e){}
+                        }
+                        currentLib[k] = newLib[k];
+                        count++;
                     }
-                } catch(err) {
-                    alert("Errore durante l'importazione: " + err.message);
-                }
+                    localStorage.setItem('ls_lib', JSON.stringify(currentLib));
+                    this.loadLibUI();
+                    alert(`Importati ${count} chip!`);
+                } catch(err) { alert("Errore file: " + err.message); }
             };
             reader.readAsText(file);
         };
@@ -646,30 +590,22 @@ const app = {
         const list = document.getElementById('custom-list');
         list.innerHTML = '';
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
-        
         for(let k in lib) {
             const bp = lib[k];
             const div = document.createElement('div');
             div.className = 'comp-btn';
-            
             const lbl = document.createElement('div');
             lbl.className = 'comp-label';
             lbl.innerHTML = `<span class="icon-indicator" style="background:#888"></span> ${bp.name}`;
             lbl.onclick = () => this.setMode('Custom', bp);
-            
             const btnGroup = document.createElement('div');
             btnGroup.className = 'btn-group';
-
             const editBtn = document.createElement('button');
-            editBtn.className = 'icon-btn';
-            editBtn.innerHTML = '✏️';
+            editBtn.className = 'icon-btn'; editBtn.innerHTML = '✏️';
             editBtn.onclick = (e) => { e.stopPropagation(); this.loadForEditing(bp.name); };
-            
             const delBtn = document.createElement('button');
-            delBtn.className = 'icon-btn delete';
-            delBtn.innerHTML = '🗑️';
+            delBtn.className = 'icon-btn delete'; delBtn.innerHTML = '🗑️';
             delBtn.onclick = (e) => { e.stopPropagation(); this.deleteLibItem(bp.name); };
-
             btnGroup.appendChild(editBtn); btnGroup.appendChild(delBtn);
             div.appendChild(lbl); div.appendChild(btnGroup); list.appendChild(div);
         }
@@ -688,13 +624,14 @@ const app = {
         let lib = JSON.parse(localStorage.getItem('ls_lib')||'{}');
         const bp = lib[name];
         if(!bp) return;
-
         this.clear();
         this.currentEditName = name;
-        const data = JSON.parse(bp.circuitData);
-        const nodeMap = {};
+        
+        // FIX LOAD: Handle legacy string or new object
+        let data = bp.circuitData;
+        if(typeof data === 'string') data = JSON.parse(data);
 
-        // Calculate bounds for auto-center
+        const nodeMap = {};
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
         data.nodes.forEach(n => {
@@ -703,14 +640,10 @@ const app = {
             else node = new Node(n.x, n.y, n.type, n.id, n.label);
             node.state = n.state || 0;
             if(n.type === 'Clock') node.frequency = n.frequency || 1; 
-            
             this.nodes.push(node);
             nodeMap[node.id] = node;
-
-            if(n.x < minX) minX = n.x;
-            if(n.y < minY) minY = n.y;
-            if(n.x > maxX) maxX = n.x;
-            if(n.y > maxY) maxY = n.y;
+            if(n.x < minX) minX = n.x; if(n.y < minY) minY = n.y;
+            if(n.x > maxX) maxX = n.x; if(n.y > maxY) maxY = n.y;
         });
 
         data.wires.forEach(w => {
@@ -719,18 +652,9 @@ const app = {
         });
         
         if(this.nodes.length > 0) {
-            const circW = maxX - minX + 100; 
-            const circH = maxY - minY + 60;
-            const circCX = minX + circW / 2;
-            const circCY = minY + circH / 2;
-            
-            const viewCX = this.c.width / 2;
-            const viewCY = this.c.height / 2;
-
-            this.offsetX = viewCX - circCX;
-            this.offsetY = viewCY - circCY;
+            this.offsetX = (this.c.width/2) - (minX + (maxX-minX)/2);
+            this.offsetY = (this.c.height/2) - (minY + (maxY-minY)/2);
         }
-
         this.propagate();
         document.getElementById('status').innerText = `Editing: ${name}`;
     }
